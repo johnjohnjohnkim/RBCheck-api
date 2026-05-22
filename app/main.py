@@ -1,21 +1,29 @@
 from fastapi import FastAPI, Response, status, HTTPException
-from fastapi.params import Body
-from pydantic import BaseModel
-from random import randrange 
-from typing import Optional
 
+from . import models
+from .database import engine
+from .routers import transactions
 
+from contextlib import asynccontextmanager
+from .database import conn
 
+models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
+app.include_router(transactions.router)
 
-transactions = [] # List taking in a dictionary of Date, Transaction Source and Amount
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    conn.close()
 
 
+
+### Unnecessary, will probably remove later if anything? ###
 
 # with open("output.txt", "w") as f:
 #     for i in range(len(transactions)):
 #         print(transactions[i], file = f)
 
-print("Log completed!")
