@@ -4,9 +4,9 @@ from typing import Optional
 from decimal import Decimal
 
 class Transaction(BaseModel):
-    transaction_ID: int
+    transaction_id: int
     amount: Decimal
     place: str
-    time: datetime
-    transaction_type : Optional['str'] = None
+    transaction_datetime: datetime
+    transaction_type : Optional[str] = None
 
