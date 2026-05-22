@@ -1,5 +1,3 @@
-import sqlite3
-import os
 import re
 
 def parseTransaction(text):
@@ -14,12 +12,16 @@ def parseTransaction(text):
         startPos = text.find("DEPOSIT")
     if startPos == -1:
         startPos = text.find("AVAIL CREDIT")
-        return "bw"
+        return "bw" #For Balance Warning
     endPos = text.find("HELP-TXT HELP")
 
     return text[startPos:endPos]
 
+
 def transactionAnalysis(text):
+    '''
+    
+    '''
     transactionType = ""
     if text == "bw":
         transactionType = "Balance Warning!"
@@ -40,38 +42,3 @@ def transactionAnalysis(text):
     elif "CREDITED FOR" in text:
         transactionType = "Credit Refund"
     return amount, place, transactionType
-
-
-transactions = [] # List taking in a dictionary of Date, Transaction Source and Amount
-
-database = os.path.expanduser("~/Library/Messages/chat.db")
-
-conn = sqlite3.connect(database)
-cursor = conn.cursor()
-
-query = "SELECT datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime'), m.attributedBody " \
-"FROM message as m, handle as h " \
-"WHERE h.id=72272 AND h.ROWID=m.handle_id " \
-"ORDER BY m.date ASC;" \
-
-cursor.execute(query)
-
-result = cursor.fetchall()
-
-
-for trans in result:
-    transaction = {}
-    
-    transaction["Time"] = trans[0]
-    analysis = transactionAnalysis(parseTransaction(str(trans[1]).upper()))
-
-    transaction["Amount"] = analysis[0]
-    transaction["Place"] = analysis[1] 
-    transaction["Type"] = analysis[2]
-
-    transactions.append(transaction)
-
-
-with open("output.txt", "w") as f:
-    for i in range(len(transactions)):
-        print(transactions[i], file = f)
