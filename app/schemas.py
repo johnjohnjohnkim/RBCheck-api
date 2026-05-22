@@ -5,8 +5,7 @@ from decimal import Decimal
 
 class Transaction(BaseModel):
     transaction_id: int
-    amount: Decimal
-    place: str
+    amount: Optional[Decimal] = None
+    place:  Optional[str] = None
     transaction_datetime: datetime
-    transaction_type : Optional[str] = None
-
+    transaction_type : str
