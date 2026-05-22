@@ -1,13 +1,13 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-import os, sqlite3
+import os, sys, sqlite3
 
 from .config import env
 
-###### For Postgres Database Connection #######
+##### For Postgres Database Connection #######
 
-PG_DB_URL = f"postgresql://{env.DATABASE_USERNAME}:{env.DATABASE_PASSWORD}@{env.DATABASE_HOSTNAME}/{env.DATABASE_NAME}"
+PG_DB_URL = f"postgresql+psycopg://{env.DATABASE_USERNAME}:{env.DATABASE_PASSWORD}@{env.DATABASE_HOSTNAME}/{env.DATABASE_NAME}"
 
 engine = create_engine(PG_DB_URL)
 
@@ -25,7 +25,11 @@ def get_db():
 
 ####### For SQLite "Chat.db" Connection #######
 
-database = os.path.expanduser("~/Library/Messages/chat.db")
+if sys.platform == "win32":
+    # For testing on Windows, you must have a copy of the database from copy_chat_db.py!!
+    database = os.path.join(os.path.dirname(__file__), '..', 'transactions.db')
+else:
+    database = os.path.expanduser("~/Library/Messages/chat.db")
 
 conn = sqlite3.connect(database)
 litecursor = conn.cursor()
