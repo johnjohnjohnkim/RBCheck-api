@@ -1,11 +1,5 @@
 import re
 
-from fastapi import FastAPI, Response, status, HTTPException
-from fastapi.params import Body
-from pydantic import BaseModel
-from random import randrange
-from typing import Optional
-
 
 
 def parseTransaction(text):
@@ -33,8 +27,9 @@ def transactionAnalysis(text):
     transactionType = ""
     if text == "bw":
         transactionType = "Balance Warning!"
-    amount = re.search('\\$[\\d.,]*\\d', text)
-    amount = amount.group() if amount else "Null"
+    amount = re.search(r'\$([\d.,]*\d)', text)
+    amount = amount.group(1) if amount else None
+
 
     place = re.search(r'AT (.+?)(?:\. STOP-TXT| STOP-TXT)', text)
     place = place.group(1) if place else ""
