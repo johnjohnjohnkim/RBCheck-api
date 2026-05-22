@@ -1,8 +1,7 @@
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, declarative_base
 
-import os, sqlite3, re
+import os, sqlite3
 
 from .config import env
 
@@ -30,3 +29,6 @@ database = os.path.expanduser("~/Library/Messages/chat.db")
 
 conn = sqlite3.connect(database)
 litecursor = conn.cursor()
+
+def close_db():
+    conn.close()
