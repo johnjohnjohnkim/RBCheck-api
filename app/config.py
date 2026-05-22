@@ -6,7 +6,7 @@ class Env(BaseSettings):
     DATABASE_USERNAME: str
     DATABASE_PASSWORD: str
     DATABASE_NAME: str
-    SECRET_KEY: str
+    # SECRET_KEY: str
     # ALGORITHM: str
     # ACCESS_TOKEN_EXPIRE_MINUTES: str # might not need this
 
