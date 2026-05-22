@@ -18,12 +18,3 @@ app.include_router(transactions.router)
 async def lifespan(app: FastAPI):
     yield
     conn.close()
-
-
-
-### Unnecessary, will probably remove later if anything? ###
-
-# with open("output.txt", "w") as f:
-#     for i in range(len(transactions)):
-#         print(transactions[i], file = f)
-
