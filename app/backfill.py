@@ -2,15 +2,13 @@
 A one-time use backfill python script to migrate a text message SQLite database <chat.db> to a detailed transaction postgres database
 """
 
-import fastapi
 from fastapi import FastAPI, Response, status, HTTPException
 from fastapi.params import Body
 from pydantic import BaseModel
 from random import randrange 
-from psycopg.rows import dict_row
 from sqlalchemy.orm import Session
 
-from .transactions import parseTransaction, transactionAnalysis
+from .sms_parser import parseTransaction, transactionAnalysis
 from .database import litecursor
 
 
@@ -35,9 +33,3 @@ for trans in result:
     transaction["Type"] = analysis[2]
 
 # parsedRows = []
-
-
-# Order of backfill
-# 1. Parse all transactions
-# 2. Save each into a json format
-# 3. 
