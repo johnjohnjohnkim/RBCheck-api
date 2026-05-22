@@ -2,5 +2,6 @@ venv/
 .env
 output.txt
 
-__pycache__
+*.db
 **/__pycache__/
+
