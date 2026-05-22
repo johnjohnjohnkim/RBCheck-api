@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session
 from .sms_parser import parseTransaction, transactionAnalysis
 from .database import litecursor
 
+from .routers.transactions import send_transaction
+from .database import SessionLocal
+from . import schemas
+
 
 query = "SELECT m.ROWID, datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime'), m.attributedBody " \
 "FROM message as m, handle as h " \
@@ -20,16 +24,18 @@ query = "SELECT m.ROWID, datetime(m.date / 1000000000 + 978307200, 'unixepoch', 
 litecursor.execute(query)
 result = litecursor.fetchall()
 
+db = SessionLocal()
+
 for trans in result:
 
     transaction = {}
 
-    transaction["rowID"] = trans[0]
-    transaction["Time"] = trans[1]
+    transaction["transaction_id"] = trans[0]
+    transaction["transaction_datetime"] = trans[1]
     
-    analysis = transactionAnalysis(parseTransaction(str(trans[1]).upper()))
-    transaction["Amount"] = analysis[0]
-    transaction["Place"] = analysis[1] 
-    transaction["Type"] = analysis[2]
+    analysis = transactionAnalysis(parseTransaction(str(trans[2]).upper()))
+    transaction["amount"] = analysis[0]
+    transaction["place"] = analysis[1] 
+    transaction["transaction_type"] = analysis[2]
 
-# parsedRows = []
+    send_transaction(schemas.Transaction(**transaction), db)
