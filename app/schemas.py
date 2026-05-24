@@ -9,3 +9,12 @@ class Transaction(BaseModel):
     place:  Optional[str] = None
     transaction_datetime: datetime
     transaction_type : str
+
+class Date(BaseModel):
+    date: str
+
+class UpdateTransaction(BaseModel):
+    amount: Decimal | None = None
+    place: str | None = None
+    transaction_datetime: datetime | None = None
+    transaction_type: str | None = None
