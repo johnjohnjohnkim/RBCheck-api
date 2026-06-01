@@ -5,6 +5,8 @@ from ..database import get_db
 from typing import List
 from datetime import datetime, time, timedelta, date
 from decimal import Decimal
+from calendar import day_name
+from ..services.transaction_services import build_datetime_range
 
 router = APIRouter(
     prefix="/transactions",
@@ -12,15 +14,14 @@ router = APIRouter(
 )
 
 @router.get("/date", status_code=status.HTTP_200_OK, response_model = List[schemas.Transaction])
-def send_date_transactions(date_str: str = None, db: Session = Depends(get_db)):
+def send_date_transactions(date_str: str = "", db: Session = Depends(get_db)):
 
     # Defaults to current date if no date is provided
-    if date_str is None:
+    if date_str == "":
         date_str = datetime.now().strftime('%m/%d/%Y')
 
     casted_date = datetime.strptime(date_str, '%m/%d/%Y').date()
-    day_start = datetime.combine(casted_date, time.min)
-    day_end = datetime.combine(casted_date, time.max)
+    day_start, day_end = build_datetime_range(casted_date)
 
     results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime >= day_start, models.Transaction.transaction_datetime <= day_end).all()
 
@@ -54,47 +55,53 @@ def update_transaction(id: int, updated_input: schemas.UpdateTransaction, db: Se
     return transaction
 
 @router.get("/weekly", response_model=List[schemas.Transaction])
-def current_week_transactions():
+def current_week_transactions(db: Session = Depends(get_db)):
     # List of all transactions starting from Sunday or Monday, depending on User's preference?
     # can definitely just make it toggle it's no biggie
-    pass
 
-@router.get("/past_7_days", response_model=List[schemas.Transaction])
-def past_7_days_transactions(db: Session = Depends(get_db)):
-    curr = date.today()
-    delta = timedelta(days=7)
+    # STARTING FROM MONDAY
+    curr_date = date.today()
+    start = curr_date - timedelta(date.today().weekday())
 
-    start = curr - delta
-
-    query_start = datetime.combine(start, time.min)
-    query_end = datetime.combine(curr, time.max)
+    query_start, query_end = build_datetime_range(curr_date, start)
 
     results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= query_start, models.Transaction.transaction_datetime<=query_end).all()
 
     return results
 
+@router.get("/past_7_days", response_model=List[schemas.Transaction])
+def past_7_days_transactions(db: Session = Depends(get_db)):
+    curr = date.today()
+    start = curr - timedelta(days=7)
+
+    query_start, query_end = build_datetime_range(curr, start)
+
+    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= query_start, models.Transaction.transaction_datetime<=query_end).all()
+    return results
+
 @router.get("/monthly", response_model=List[schemas.Transaction])
 def current_month_transactions(db: Session = Depends(get_db)):
     curr = date.today()
-    delta = timedelta(days=curr.day-1)
+    start = curr - timedelta(days=curr.day-1)
 
-    start_of_month = curr - delta
+    query_start, query_end = build_datetime_range(curr, start)
 
-    query_month_start = datetime.combine(start_of_month, time.min)
-    query_month_end = datetime.combine(curr, time.max)
-
-    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= query_month_start, models.Transaction.transaction_datetime<=query_month_end).all()
+    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= query_start, models.Transaction.transaction_datetime<=query_end).all()
     return results
 
-@router.get("/biweekly", response_model=List[schemas.Transaction])
-def biweekly_transactions():
-    # Unsure of the best way to do this. Probably rolling basis? just not sure if this is necessary to implement.
-    pass
-
 @router.get("/date_range", response_model=List[schemas.Transaction])
-def transactions_by_date_range(start_date: str, end_date: str, db: Session = Depends(get_db)):
-    # If end date not provided, set to current date?
-    pass
+def transactions_by_date_range(start_date: str, end_date: str = None, db: Session = Depends(get_db)):
+
+    dt_start = datetime.strptime(start_date, '%m/%d/%Y').date()
+    if end_date is None:
+        end_date = date.today()
+    else: 
+        end_date = datetime.strptime(end_date, '%m/%d/%Y').date()
+
+    query_start, query_end = build_datetime_range(dt_start, end_date)
+    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= query_start, models.Transaction.transaction_datetime<=query_end).all()
+    
+    return results
 
 @router.get("/merchant", response_model = List[schemas.Transaction])
 def transactions_at_merchant(merchant: str, db: Session = Depends(get_db)):
