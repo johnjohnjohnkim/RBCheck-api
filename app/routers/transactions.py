@@ -1,6 +1,7 @@
 from .. import models, schemas
 from fastapi import status, HTTPException, Depends, APIRouter
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from ..database import get_db
 from typing import List
 from datetime import datetime, time, timedelta, date
@@ -13,6 +14,32 @@ router = APIRouter(
     tags=["transactions"]
 )
 
+@router.get("/summary", status_code=status.HTTP_200_OK, response_model=schemas.SpendingDisplay)
+def sendSummary(db: Session = Depends(get_db)):
+    curr = date.today()
+
+    EXCLUDED_TYPES = ('Credit Card Payment', 'Deposit')
+
+    def query_sum(day_max, day_min):
+        result = db.query(func.sum(models.Transaction.amount)).filter(
+            models.Transaction.transaction_datetime >= day_min,
+            models.Transaction.transaction_datetime <= day_max,
+            models.Transaction.transaction_type.notin_(EXCLUDED_TYPES)
+        ).scalar()
+        return result or Decimal(0)
+
+    return schemas.SpendingDisplay(
+        daily=query_sum(*build_datetime_range(curr)),
+        weekly=query_sum(*build_datetime_range(curr, curr - timedelta(days=curr.weekday()))),
+        rolling=query_sum(*build_datetime_range(curr, curr - timedelta(days=7))),
+        monthly=query_sum(*build_datetime_range(curr, curr - timedelta(days=curr.day - 1))),
+    )
+
+@router.get("", status_code=status.HTTP_200_OK, response_model=List[schemas.Transaction])
+def get_all_transactions(db: Session = Depends(get_db)):
+    return db.query(models.Transaction).order_by(models.Transaction.transaction_datetime.desc()).all()
+
+
 @router.get("/date", status_code=status.HTTP_200_OK, response_model = List[schemas.Transaction])
 def send_date_transactions(date_str: str = "", db: Session = Depends(get_db)):
 
@@ -21,9 +48,10 @@ def send_date_transactions(date_str: str = "", db: Session = Depends(get_db)):
         date_str = datetime.now().strftime('%m/%d/%Y')
 
     casted_date = datetime.strptime(date_str, '%m/%d/%Y').date()
-    day_start, day_end = build_datetime_range(casted_date)
+    day_max, day_min = build_datetime_range(casted_date)
 
-    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime >= day_start, models.Transaction.transaction_datetime <= day_end).all()
+    print(day_max, day_max)
+    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime <= day_max, models.Transaction.transaction_datetime >= day_min).all()
 
     return results
 
@@ -63,9 +91,9 @@ def current_week_transactions(db: Session = Depends(get_db)):
     curr_date = date.today()
     start = curr_date - timedelta(date.today().weekday())
 
-    query_start, query_end = build_datetime_range(curr_date, start)
+    day_max, day_min = build_datetime_range(curr_date, start)
 
-    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= query_start, models.Transaction.transaction_datetime<=query_end).all()
+    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= day_min, models.Transaction.transaction_datetime<=day_max).all()
 
     return results
 
@@ -74,32 +102,32 @@ def past_7_days_transactions(db: Session = Depends(get_db)):
     curr = date.today()
     start = curr - timedelta(days=7)
 
-    query_start, query_end = build_datetime_range(curr, start)
+    day_max, day_min = build_datetime_range(curr, start)
 
-    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= query_start, models.Transaction.transaction_datetime<=query_end).all()
+    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= day_min, models.Transaction.transaction_datetime<=day_max).all()
     return results
 
-@router.get("/monthly", response_model=List[schemas.Transaction])
+@router.get("/month", response_model=List[schemas.Transaction])
 def current_month_transactions(db: Session = Depends(get_db)):
     curr = date.today()
     start = curr - timedelta(days=curr.day-1)
 
-    query_start, query_end = build_datetime_range(curr, start)
+    day_max, day_min = build_datetime_range(curr, start)
 
-    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= query_start, models.Transaction.transaction_datetime<=query_end).all()
+    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= day_min, models.Transaction.transaction_datetime<=day_max).all()
     return results
 
 @router.get("/date_range", response_model=List[schemas.Transaction])
 def transactions_by_date_range(start_date: str, end_date: str = None, db: Session = Depends(get_db)):
 
-    dt_start = datetime.strptime(start_date, '%m/%d/%Y').date()
+    dt_start = datetime.strptime(start_date, '%Y-%m-%d').date()
     if end_date is None:
         end_date = date.today()
     else: 
-        end_date = datetime.strptime(end_date, '%m/%d/%Y').date()
+        end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
 
-    query_start, query_end = build_datetime_range(dt_start, end_date)
-    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= query_start, models.Transaction.transaction_datetime<=query_end).all()
+    day_max, day_min = build_datetime_range(dt_start, end_date)
+    results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= day_min, models.Transaction.transaction_datetime<=day_max).all()
     
     return results
 
@@ -124,3 +152,5 @@ def get_one_transaction(id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction could not be found.")
     
     return transaction
+
+
