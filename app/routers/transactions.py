@@ -50,7 +50,6 @@ def send_date_transactions(date_str: str = "", db: Session = Depends(get_db)):
     casted_date = datetime.strptime(date_str, '%m/%d/%Y').date()
     day_max, day_min = build_datetime_range(casted_date)
 
-    print(day_max, day_max)
     results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime <= day_max, models.Transaction.transaction_datetime >= day_min).all()
 
     return results
