@@ -6,6 +6,7 @@ from ..database import litecursor
 from ..routers.transactions import send_transaction
 from ..sms_parser import parseTransaction, transactionAnalysis
 from ..database import SessionLocal, litecursor
+from ..services.transaction_services import filter_cc_payment_duplicates
 from .. import schemas
 from ..import models
 
@@ -33,17 +34,18 @@ while True:
         litecursor.execute(lite_get_new_queries)
         result = litecursor.fetchall()
 
+        batch = []
         for trans in result:
-
-            transaction = {}
-
-            transaction["transaction_id"] = trans[0]
-            transaction["transaction_datetime"] = trans[1]
-            
             analysis = transactionAnalysis(parseTransaction(str(trans[2]).upper()))
-            transaction["amount"] = analysis[0]
-            transaction["place"] = analysis[1] 
-            transaction["transaction_type"] = analysis[2]
+            batch.append({
+                "transaction_id": trans[0],
+                "transaction_datetime": trans[1],
+                "amount": analysis[0],
+                "place": analysis[1],
+                "transaction_type": analysis[2],
+            })
+
+        for transaction in filter_cc_payment_duplicates(batch, db):
             send_transaction(schemas.Transaction(**transaction), db)
     
     time.sleep(5)
