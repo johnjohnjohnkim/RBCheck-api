@@ -35,9 +35,9 @@ def sendSummary(db: Session = Depends(get_db)):
         monthly=query_sum(*build_datetime_range(curr, curr - timedelta(days=curr.day - 1))),
     )
 
-@router.get("", status_code=status.HTTP_200_OK, response_model=List[schemas.Transaction])
-def get_all_transactions(db: Session = Depends(get_db)):
-    return db.query(models.Transaction).order_by(models.Transaction.transaction_datetime.desc()).all()
+@router.get("/", status_code=status.HTTP_200_OK, response_model=List[schemas.Transaction])
+def get_all_transactions(offset: int, limit: int, db: Session = Depends(get_db)):
+    return db.query(models.Transaction).order_by(models.Transaction.transaction_datetime.desc()).offset(offset).limit(limit).all()
 
 
 @router.get("/date", status_code=status.HTTP_200_OK, response_model = List[schemas.Transaction])
@@ -64,7 +64,6 @@ def send_transaction(transactions: schemas.Transaction, db: Session = Depends(ge
     db.refresh(new_transaction)
 
     return new_transaction
-    
 
 @router.patch("/{id}", response_model=schemas.Transaction, status_code=status.HTTP_200_OK)
 def update_transaction(id: int, updated_input: schemas.UpdateTransaction, db: Session = Depends(get_db)):
