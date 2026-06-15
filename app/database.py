@@ -7,7 +7,7 @@ from .config import env
 
 ##### For Postgres Database Connection #######
 
-PG_DB_URL = f"postgresql+psycopg://{env.DATABASE_USERNAME}:{env.DATABASE_PASSWORD}@{env.DATABASE_HOSTNAME}/{env.DATABASE_NAME}"
+PG_DB_URL = f"postgresql+psycopg://{env.DATABASE_USERNAME}:{env.DATABASE_PASSWORD}@{env.IP_ADDRESS}:{env.DATABASE_PORT}/{env.DATABASE_NAME}"
 
 engine = create_engine(PG_DB_URL)
 

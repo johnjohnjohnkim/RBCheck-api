@@ -16,5 +16,12 @@ class Date(BaseModel):
 class UpdateTransaction(BaseModel):
     amount: Decimal | None = None
     place: str | None = None
+    date: str
     transaction_datetime: datetime | None = None
     transaction_type: str | None = None
+
+class SpendingDisplay(BaseModel):
+    daily: Decimal
+    weekly: Decimal
+    rolling: Decimal
+    monthly: Decimal
