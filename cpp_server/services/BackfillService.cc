@@ -1,5 +1,6 @@
 #include "services/BackfillService.h"
 #include "services/SmsParser.h"
+#include <obfuscate.h>
 #include <sqlite3.h>
 #include <drogon/orm/DbClient.h>
 #include <iostream>
@@ -16,8 +17,7 @@ std::string toUpper(std::string s) {
 }
 } // namespace
 
-int runBackfill(const std::string& sqliteDbPath, const std::string& pgConnStr) {
-    // Standalone synchronous PG client — does not require the Drogon event loop
+int runBackfill(const std::string& sqliteDbPath, const std::string& pgConnStr, int handleId) {
     auto pgDb = drogon::orm::DbClient::newPgClient(pgConnStr, 1);
 
     sqlite3* sqliteDb = nullptr;
@@ -27,14 +27,12 @@ int runBackfill(const std::string& sqliteDbPath, const std::string& pgConnStr) {
         return -1;
     }
 
-    // Mirrors the query in backfill.py — handle ROWID 72272 is the RBC shortcode
-    const char* sql =
-        "SELECT m.ROWID, "
-        "       datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime'), "
-        "       m.attributedBody "
-        "FROM message AS m, handle AS h "
-        "WHERE h.id = 72272 AND h.ROWID = m.handle_id "
-        "ORDER BY m.date DESC;";
+    // Query fragments obfuscated — handleId injected at runtime so it's never a literal.
+    std::string sqlStr =
+        std::string(AY_OBFUSCATE("SELECT m.ROWID, datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime'), m.attributedBody FROM message AS m, handle AS h WHERE h.id = "))
+        + std::to_string(handleId)
+        + AY_OBFUSCATE(" AND h.ROWID = m.handle_id ORDER BY m.date DESC;");
+    const char* sql = sqlStr.c_str();
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(sqliteDb, sql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -53,7 +51,6 @@ int runBackfill(const std::string& sqliteDbPath, const std::string& pgConnStr) {
         if (!dateRaw) { ++skipped; continue; }
         std::string datetime = std::string(dateRaw) + "+00";
 
-        // attributedBody is a BLOB
         std::string rawBody;
         if (sqlite3_column_type(stmt, 2) != SQLITE_NULL) {
             const void* blob = sqlite3_column_blob(stmt, 2);
@@ -78,15 +75,16 @@ int runBackfill(const std::string& sqliteDbPath, const std::string& pgConnStr) {
 
         try {
             pgDb->execSqlSync(
-                "INSERT INTO transactions "
-                "    (transaction_id, transaction_datetime, amount, place, transaction_type) "
-                "VALUES ($1, $2::timestamptz, $3, $4, $5) "
-                "ON CONFLICT (transaction_id) DO NOTHING",
+                std::string(AY_OBFUSCATE(
+                    "INSERT INTO transactions "
+                    "    (transaction_id, transaction_datetime, amount, place, transaction_type) "
+                    "VALUES ($1, $2::timestamptz, $3, $4, $5) "
+                    "ON CONFLICT (transaction_id) DO NOTHING")),
                 rowId, datetime, amount, place, txType
             );
             ++inserted;
         } catch (const drogon::orm::DrogonDbException& e) {
-            std::cerr << "[backfill] Insert failed for ROWID " << rowId
+            std::cerr << AY_OBFUSCATE("[backfill] row write failed, ROWID ") << rowId
                       << ": " << e.base().what() << "\n";
             ++skipped;
         }
