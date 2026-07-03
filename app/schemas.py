@@ -14,6 +14,7 @@ class Date(BaseModel):
     date: str
 
 class UpdateTransaction(BaseModel):
+    transaction_id: int
     amount: Decimal | None = None
     place: str | None = None
     date: str

@@ -5,3 +5,6 @@ output.txt
 *.db
 **/__pycache__/
 
+# C++ CMake build output (generated, not source)
+cpp_server/build/
+
