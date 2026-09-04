@@ -1,134 +1,128 @@
 # RBCheck
 
-A personal transaction-tracking API. RBCheck reads the SMS transaction alerts
-RBC (Royal Bank of Canada) sends to iMessage/SMS, parses them into structured
-transactions, stores them in PostgreSQL, and serves them over a FastAPI HTTP
-API for tracking spending.
+A FastAPI backend that turns RBC (Royal Bank of Canada) SMS transaction alerts into a structured, queryable spending ledger.
+
+RBC sends a text for every purchase, withdrawal, deposit, and credit card payment. On macOS those texts land in the iMessage database (`chat.db`). RBCheck reads that SQLite database, parses each message's embedded text for the amount/merchant/transaction type, and writes the result into a Postgres table that a REST API exposes to the [RBCheck-client](../RBCheck-client) frontend.
 
 ## How it works
 
-- RBC sends an SMS alert for every purchase, withdrawal, deposit, and credit
-  card payment. On macOS these land in the Messages app and are stored in
-  `~/Library/Messages/chat.db`.
-- `app/sms_parser.py` extracts the amount, merchant, and transaction type out
-  of the raw message body.
-- `app/scripts/backfill.py` is a one-time script that reads all historical
-  RBC messages out of `chat.db` and inserts them into Postgres.
-- `app/scripts/poller.py` runs continuously (polling every 5 seconds),
-  watching for new RBC messages and inserting them as they arrive.
-- Both scripts run `app/services/transaction_services.py` first to drop
-  `Withdrawal` entries that are really the same charge as a `Credit Card
-  Payment` seen within 60 seconds, since RBC sends both for the same event.
-- `app/main.py` exposes the resulting data through a FastAPI app
-  (`app/routers/transactions.py`, `app/routers/users.py`).
+1. **Ingestion** (`app/scripts/poller.py` or `app/scripts/backfill.py`) reads new rows from the `message`/`handle` tables in `chat.db` for the RBC SMS sender.
+2. **Parsing** (`app/sms_parser.py`) extracts the readable text from each message's `attributedBody` blob, then regexes out the dollar amount, merchant name, and transaction type (`Deposit`, `Withdrawal`, `CC Purchase`, `Credit Card Payment`, `Credit Refund`, or a balance-warning marker).
+3. **Deduplication** (`app/services/transaction_services.py`) drops `Withdrawal` rows that are really the settlement side of a `Credit Card Payment` seen within 60 seconds, checking both the current batch and existing Postgres rows.
+4. **Storage** — each parsed transaction is inserted into Postgres via the `POST /transactions` endpoint, using a single SQLAlchemy `Transaction` model (`app/models.py`).
+5. **API** (`app/routers/transactions.py`) serves summaries and filtered transaction lists to the client.
 
-## Platform requirements
+## Tech stack
 
-Live ingestion (`poller.py`, `backfill.py`) requires **macOS**, since it reads
-directly from `~/Library/Messages/chat.db`. The FastAPI app itself
-(`app/main.py`) is plain Python and has no macOS dependency.
+- **FastAPI** + **Uvicorn** — HTTP API and ASGI server
+- **SQLAlchemy** + **psycopg** — Postgres ORM/driver for the transactions table
+- **Pydantic / pydantic-settings** — request/response schemas and env-based config
+- **sqlite3** (stdlib) — read-only access to the iMessage `chat.db`
 
-For development/testing on Windows, `app/database.py` falls back to a local
-`transactions.db` file instead of `~/Library/Messages/chat.db`. Use
-`copy_chat_db.py` (run on a machine with a real `chat.db`) to copy the
-`handle` and `message` tables into that local `transactions.db` file.
+See `requirements.txt` for exact pinned versions.
 
-## Requirements
+## Project structure
 
-- Python 3.11
-- PostgreSQL
+```
+RBCheck/
+├── app/
+│   ├── main.py                       FastAPI app, CORS config, router registration
+│   ├── config.py                     Env settings (pydantic-settings, reads .env)
+│   ├── database.py                   Postgres engine/session + SQLite chat.db connection
+│   ├── models.py                     SQLAlchemy Transaction model
+│   ├── schemas.py                    Pydantic schemas (Transaction, UpdateTransaction, SpendingDisplay, Date)
+│   ├── sms_parser.py                 Extracts transaction text + amount/merchant/type from iMessage bodies
+│   ├── routers/
+│   │   └── transactions.py           /transactions REST endpoints
+│   ├── services/
+│   │   └── transaction_services.py   Date-range helper + CC-payment/withdrawal de-duplication
+│   └── scripts/
+│       ├── backfill.py               One-time import of all historical RBC texts into Postgres
+│       └── poller.py                 Polls chat.db every 5s and pushes new transactions
+├── copy_chat_db.py                   Dev utility: copies handle/message tables out of chat.db for testing off macOS
+├── rbcheck.dockerfile                Container build for the API
+└── requirements.txt
+```
+
+## Prerequisites
+
+- Python 3.11+ (the Docker image uses `python:3.11-slim`)
+- A running Postgres instance
+- macOS with iMessage forwarding set up for the RBC SMS shortcode (for live ingestion) — on other platforms, a copy of `chat.db`'s `handle`/`message` tables (see [Dev utility: `copy_chat_db.py`](#dev-utility-copy_chat_dbpy))
 
 ## Setup
 
 ```bash
 python -m venv venv
-source venv/bin/activate
+venv\Scripts\activate        # Windows
+# source venv/bin/activate   # macOS/Linux
+
 pip install -r requirements.txt
+cp app/.env.example app/.env
 ```
 
-Create a `.env` file in the repository root (this is where `app/config.py`
-loads it from) with the following variables. **Note:** `app/.env.example` is
-currently out of date (it documents an older, removed version of this
-project) — the variables below are the ones actually read by `app/config.py`
-and `app/database.py`.
+Fill in `app/.env`:
 
 | Variable | Description |
 |---|---|
-| `DATABASE_USERNAME` | PostgreSQL role |
-| `DATABASE_PASSWORD` | PostgreSQL password |
+| `DATABASE_HOSTNAME` | Not currently read (see note below) |
+| `DATABASE_PORT` | Postgres port |
+| `DATABASE_USERNAME` | Postgres role |
+| `DATABASE_PASSWORD` | Postgres password |
 | `DATABASE_NAME` | Database name |
-| `DATABASE_PORT` | PostgreSQL port (typically `5432`) |
-| `IP_ADDRESS` | PostgreSQL host — this is the value actually used to build the connection string |
-| `DATABASE_HOSTNAME` | Required by `app/config.py`, but currently **unused** in the actual database connection (see `IP_ADDRESS` above) |
-| `SECRET_KEY` | Signing key for JWTs |
-| `ALGORITHM` | JWT signing algorithm (e.g. `HS256`) |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT expiry, in minutes |
+| `IP_ADDRESS` | Postgres host — the connection string in `app/database.py` uses this, not `DATABASE_HOSTNAME` |
 
-## Running the API
+> **Note:** `app/.env.example` also lists `DATABASE_POOL_SIZE`, `LISTEN_HOST`, `LISTEN_PORT`, `RBC_HANDLE_ID`, and `RBC_CHATDB_PATH`, but none of these are read by `app/config.py` or referenced elsewhere in the code. The iMessage handle ROWID for the RBC sender and the `chat.db` path are currently hardcoded in `app/scripts/backfill.py` and `app/scripts/poller.py` rather than configurable via environment variables.
 
-From the repository root:
+## Running
+
+Start the API:
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-On startup this creates any missing tables from `app/models.py` against the
-configured Postgres database.
+Run ingestion (requires the API/Postgres to be reachable, since both scripts call the `send_transaction` handler directly):
+
+```bash
+python -m app.scripts.backfill   # one-time import of full chat.db history
+python -m app.scripts.poller     # long-running, polls every 5 seconds
+```
+
+### Dev utility: `copy_chat_db.py`
+
+`app/database.py` connects to `~/Library/Messages/chat.db` on every platform except Windows, where it falls back to a local `transactions.db` file (since there's no real iMessage database to read). To populate `transactions.db` for local testing, run `copy_chat_db.py` on a Mac that has the real `chat.db`, then copy the resulting `transactions.db` file into the `RBCheck/` root on Windows.
 
 ### Docker
 
 ```bash
 docker build -f rbcheck.dockerfile -t rbcheck .
+docker run --env-file app/.env -p 8000:8000 rbcheck
 ```
 
-`rbcheck.dockerfile`'s `CMD` currently runs `uvicorn main:app`, which does not
-match this project's package layout (`app/main.py` uses relative imports and
-must be run as `app.main:app`). Until the Dockerfile is updated, run the
-container with an overridden command, e.g.:
-
-```bash
-docker run --env-file .env -p 8000:8000 rbcheck uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-## Ingesting transactions
-
-```bash
-python -m app.scripts.backfill   # one-time: import all historical RBC messages
-python -m app.scripts.poller     # continuous: watch for and insert new ones
-```
+> **Note:** `rbcheck.dockerfile` runs `uvicorn main:app`, but the FastAPI app lives at `app/main.py` (i.e. `app.main:app`), not a root-level `main.py`. As written, the container command will fail to find the app.
 
 ## API
 
-### Transactions (`/transactions`)
+All endpoints are under `/transactions` (see `app/routers/transactions.py` for full details):
 
-| Method & path | Description |
-|---|---|
-| `GET /transactions/summary` | Total spending for today, this week, the trailing 7 days, and this month (excludes `Credit Card Payment` and `Deposit`) |
-| `GET /transactions/?offset=&limit=` | Paginated list, newest first |
-| `GET /transactions/date?date_str=MM/DD/YYYY` | Transactions on a given day (defaults to today) |
-| `GET /transactions/weekly` | Transactions since the start of this week (Monday) |
-| `GET /transactions/past_7_days` | Transactions in the trailing 7 days |
-| `GET /transactions/month` | Transactions this calendar month |
-| `GET /transactions/date_range?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` | Transactions in a date range (`end_date` defaults to today) |
-| `GET /transactions/merchant?merchant=` | Transactions where the merchant name contains the given substring |
-| `GET /transactions/price_range?range_start=&range_end=` | Transactions within an amount range |
-| `GET /transactions/{id}` | A single transaction by ID |
-| `POST /transactions` | Create a transaction |
-| `PATCH /transactions/{id}` | Update a transaction |
+| Method | Path | Description |
+|---|---|---|
+| GET | `/transactions/summary` | Daily/weekly/rolling-7-day/monthly totals (excludes deposits and credit card payments) |
+| GET | `/transactions/` | Paginated list (`offset`, `limit`) |
+| GET | `/transactions/date?date_str=MM/DD/YYYY` | Transactions on a given date (defaults to today) |
+| GET | `/transactions/weekly` | Transactions since Monday |
+| GET | `/transactions/past_7_days` | Rolling 7-day window |
+| GET | `/transactions/month` | Transactions since the 1st of the month |
+| GET | `/transactions/date_range?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` | Transactions in an arbitrary range |
+| GET | `/transactions/merchant?merchant=` | Case-insensitive merchant search |
+| GET | `/transactions/price_range?range_start=&range_end=` | Transactions within an amount range |
+| GET | `/transactions/{id}` | Single transaction |
+| POST | `/transactions` | Create a transaction |
+| PATCH | `/transactions/{id}` | Partially update a transaction |
 
-### Users (`/users`)
+CORS is restricted to `gwanwoo.dev`, its subdomains, and `localhost`/`127.0.0.1` (see `app/main.py`).
 
-| Method & path | Description |
-|---|---|
-| `POST /users` | Create a user (signup) |
+## Tests
 
-## Known issues
-
-- **Auth is incomplete.** `app/oauth2.py` sets up JWT verification and
-  expects a `/login` route (`OAuth2PasswordBearer(tokenUrl='login')`), but no
-  such route exists yet — only `POST /users` (signup) is implemented.
-  `oauth2.py` also queries `models.User`, but the actual model is
-  `models.Users`, so `get_current_user` would fail if it were wired up to a
-  route today.
-- `rbcheck.dockerfile`'s `CMD` needs updating to match the current package
-  layout (see [Docker](#docker) above).
+No test suite is currently present in this repository.
