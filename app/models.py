@@ -15,3 +15,11 @@ class Transaction(Base):
     amount = Column(Numeric(precision=10, scale=2))
     place = Column(String)
     transaction_type = Column(String, nullable = False)
+
+class Users(Base):
+    __tablename__ = "users"
+
+    user_id = Column(Integer, primary_key=True)
+    user_email = Column(String, nullable = False, unique=True)
+    user_password = Column(String, nullable = False)
+    created_at = Column(TIMESTAMP(timezone = True), nullable = False, server_default = text('now()'))
