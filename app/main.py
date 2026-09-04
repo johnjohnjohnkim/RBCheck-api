@@ -2,7 +2,7 @@ from fastapi import FastAPI, Response, status, HTTPException
 
 from . import models
 from .database import engine
-from .routers import transactions
+from .routers import transactions, users
 
 from contextlib import asynccontextmanager
 from .database import conn
@@ -28,6 +28,7 @@ app.add_middleware(
 )
 
 app.include_router(transactions.router)
+app.include_router(users.router)
 
 
 @asynccontextmanager
