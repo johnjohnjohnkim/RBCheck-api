@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from datetime import datetime
 from typing import Optional
 from decimal import Decimal
@@ -26,3 +26,18 @@ class SpendingDisplay(BaseModel):
     weekly: Decimal
     rolling: Decimal
     monthly: Decimal
+
+class UserCreate(BaseModel):
+    user_email: EmailStr
+    user_password: str
+
+class UserOut(BaseModel):
+    user_id: int
+    user_email: EmailStr
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class TokenData(BaseModel):
+    id: Optional[int] = None
