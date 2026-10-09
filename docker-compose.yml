@@ -1,0 +1,110 @@
+# The hosted stack: Postgres + the API + Caddy (HTTPS in front). Only Caddy is
+# reachable from outside; Postgres and the API have no published ports.
+#
+# Always run it with the deploy env file, never the repo's dev .env (which holds
+# your real database password); every command needs the flag, not just `up`:
+#   cp deploy.env.example deploy.env     # then fill it in
+#   docker compose --env-file deploy.env up -d --build
+#   docker compose --env-file deploy.env logs -f api
+#
+# `docker compose down -v` deletes the database volume. Don't run it with real data.
+
+name: rbcheck   # fixed, so the data volume is not tied to the folder name
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      # Fails with a clear message if the deploy env file was not used (the dev
+      # .env does not define it).
+      RBCHECK_DEPLOY_ENV: ${RBCHECK_DEPLOY_ENV:?run with --env-file deploy.env, not the dev .env}
+      POSTGRES_USER: rbcheck
+      POSTGRES_DB: rbcheck
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?set DATABASE_PASSWORD in deploy.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # -h 127.0.0.1 uses TCP, which only the final server answers; during first-run
+      # initialisation Postgres listens on the Unix socket only.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U rbcheck -d rbcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  api:
+    build:
+      context: .
+      dockerfile: rbcheck.dockerfile
+    image: rbcheck-api:local
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: &api_env
+      DATABASE_HOSTNAME: db
+      DATABASE_PORT: "5432"
+      DATABASE_USERNAME: rbcheck
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?set DATABASE_PASSWORD in deploy.env}
+      DATABASE_NAME: rbcheck
+      READ_TOKEN: ${READ_TOKEN:?set READ_TOKEN in deploy.env}
+      WRITE_TOKEN: ${WRITE_TOKEN:?set WRITE_TOKEN in deploy.env}
+      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS in deploy.env}
+      TIMEZONE: ${TIMEZONE:-America/Toronto}
+
+  # Stores the daily digests. Settles yesterday as well as today (the default 2
+  # days), every six hours; it waits for the API so the tables exist. A failed run
+  # (database briefly down) is retried after five minutes instead of six hours.
+  digest:
+    # Same build and tag as the api service. It needs its own build section: without
+    # one, a first `up` would try to pull rbcheck-api:local from a registry, where it
+    # doesn't exist. The second build is a cache hit.
+    build:
+      context: .
+      dockerfile: rbcheck.dockerfile
+    image: rbcheck-api:local
+    restart: unless-stopped
+    logging: *logging
+    init: true                 # so `docker stop` is immediate
+    depends_on:
+      api:
+        condition: service_healthy
+    environment: *api_env
+    healthcheck:
+      disable: true
+    command: ["sh", "-c", "while true; do python -m app.scripts.digest && sleep 21600 || sleep 300; done"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      # With a real domain keep these at 80 and 443 (certificate issuance needs them);
+      # the variables are for local testing only.
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      # A domain name makes Caddy fetch and renew a certificate automatically.
+      # The default serves plain HTTP.
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

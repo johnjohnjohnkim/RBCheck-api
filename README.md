@@ -46,7 +46,11 @@ RBCheck/
 │       └── demo_server.py Real API on made-up data, no Postgres
 ├── tests/                 pytest suite (SQLite; never touches Postgres or your messages)
 ├── copy_chat_db.py        Dev utility: copy handle/message tables out of chat.db
-├── rbcheck.dockerfile
+├── rbcheck.dockerfile     The API image (non-root, health-checked)
+├── docker-compose.yml     The hosted stack: Postgres + API + digest job + Caddy (HTTPS)
+├── Caddyfile              Reverse proxy: automatic HTTPS, 1 MB body limit
+├── deploy.env.example     Settings for the stack (copy to deploy.env)
+├── docs/MIGRATING-DATA.md Moving your existing data into the hosted database
 └── requirements.txt
 ```
 
@@ -159,12 +163,20 @@ Runs the real API on an in-memory SQLite database of made-up spending. It prints
 
 ## Docker
 
+The hosted stack is four containers (`docker-compose.yml`): **Postgres** (data in a named volume), the **API**, a small **digest** job that stores the daily digests every six hours, and **Caddy**, the only one reachable from outside, which serves HTTPS (a certificate is fetched automatically when `SITE_ADDRESS` is a domain name) and refuses request bodies over 1 MB. Postgres and the API publish no ports.
+
 ```bash
-docker build -f rbcheck.dockerfile -t rbcheck .
-docker run --env-file .env -p 8000:8000 rbcheck
+cp deploy.env.example deploy.env     # fill in the password, both tokens, CORS_ORIGINS, SITE_ADDRESS
+docker compose --env-file deploy.env up -d --build
+docker compose --env-file deploy.env ps          # db, api, caddy should become healthy
+docker compose --env-file deploy.env logs -f api
 ```
 
-The image contains only the API (`app/`); the Mac poller is not part of it.
+Use the deploy env file on **every** compose command (not your dev `.env`, which holds your real database password). The stack refuses to start without the marker line in `deploy.env`, so forgetting the flag fails loudly. `docker compose ... down -v` deletes the database volume.
+
+To bring your existing data across, follow [docs/MIGRATING-DATA.md](docs/MIGRATING-DATA.md). The Mac poller is not part of the stack; it pushes to the API (see "Setup: the Mac (poller)").
+
+For a quick local trial without Postgres, use the demo server above instead.
 
 ## Tests
 

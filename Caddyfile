@@ -1,0 +1,19 @@
+# Reverse proxy in front of the API. SITE_ADDRESS is ":80" (plain HTTP) by
+# default; set it to the domain name to get automatic HTTPS.
+{$SITE_ADDRESS::80} {
+	encode gzip
+
+	# Refuse oversized bodies, including chunked ones the API cannot see in advance.
+	request_body {
+		max_size 1MB
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Strict-Transport-Security "max-age=31536000"
+	}
+
+	reverse_proxy api:8000
+}

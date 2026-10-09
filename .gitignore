@@ -1,6 +1,12 @@
 venv/
 .env
+deploy.env
+*.dump
 output.txt
+
+# Any env file is private; only the .example templates are committed.
+*.env
+!*.env.example
 
 *.db
 **/__pycache__/
