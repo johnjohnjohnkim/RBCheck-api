@@ -20,7 +20,7 @@ Repos: backend `D:\repos\RBCheck` (this file lives here), client `D:\repos\RBChe
 
 ## Commands
 - Backend tests: `D:\repos\RBCheck\venv\Scripts\python.exe -m pytest -q` (run from `D:\repos\RBCheck`)
-- Client syntax: `node --check js/app.js js/api.js js/config.js` (run from `D:\repos\RBCheck-client`); client unit tests added in milestone 3
+- Client syntax: `node --check js/app.js js/api.js js/config.js` (run from `D:\repos\RBCheck-client`); client unit tests (`node --test`, Node 24 needs no directory argument) added in milestone 3
 - Run API: `venv\Scripts\python.exe -m uvicorn app.main:app --reload` (needs Postgres env, see `.env`)
 - Serve client: `python -m http.server 3000` in the client repo, open `http://127.0.0.1:3000/index.html?api=http://127.0.0.1:8000`
 - Docker: `docker compose ...` (Docker 29 and Compose v5 are installed)
@@ -42,12 +42,12 @@ Blockers: none
 Done-check: `venv\Scripts\python.exe -m pytest -q` -> all pass, including new tests that cover the digest math on fixed data, the timezone boundary (a purchase at 11:30pm Toronto time counts on that day even when the server clock is UTC), idempotent re-computation, and both endpoints.
 Report: Digest service, `daily_digests` table, `/insights/today` and `/insights/history`, `app/scripts/digest.py` (default last 2 days), `TIMEZONE` setting (validated at startup; Postgres session timezone set; ingestion now stamps messages with an explicit zone from UTC seconds), one shared spending definition used by the summary and digests, rolling-7-days now means seven days including today. Two reviewer rounds: round 1 found stale cached digests, the session-timezone data shift, a first-save race, N+1 queries, payload drift and a distorted projection; all fixed (digests are reused only once `settled`, i.e. final, 2h past day end, and current `v`; projection is null until 3 completed days). 56 tests pass. NOT verified on real Postgres (Docker Desktop was not running); revisit in milestone 6. Before deploying against the existing database run `SHOW timezone;` and follow the README section 'Upgrading an existing database (timezone)'. Deferred: merchant-name normalisation, early-history dilution, projection skew in the first month. Journal: `journal/2026-10-09-daily-insights-backend.md`.
 
-## 3. Daily insights: client  [ ]
+## 3. Daily insights: client  [x]
 Why: show the digest on the Ledger page and let the user track past days.
 Touches: `D:\repos\RBCheck-client`: `index.html`, `css/styles.css`, `js/api.js` (new `insights.today()` and `insights.history()`), `js/insights.js` (pure formatting and rendering helpers), `js/app.js`, `tests/insights.test.mjs`.
 Blockers: none
-Done-check: in the client repo, `node --test tests/` -> all pass (the helpers are tested with fixed digest data, including an empty day and a missing field); `node --check js/*.js` -> no output; with the API running against test data the page shows today's digest and a history list (confirm in a browser or by fetching the endpoints and rendering the helpers).
-Report:
+Done-check: in the client repo, `node --test` -> all pass (the helpers are tested with fixed digest data, including an empty day and a missing field); `node --check js/*.js` -> no output; with the API running against test data the page shows today's digest and a history list (confirm in a browser or by fetching the endpoints and rendering the helpers).
+Report: Daily Digest section on the Ledger page (today's spend vs previous 7-day average, where it went, unusual charges, month-end pace, tappable past days) via `js/insights.js` (pure, escaped helpers) and `js/app.js` (digest fetched inside `refreshAll` with a sequence guard; hero delta now uses the server's digest figure). Added `app/scripts/demo_server.py` (real API on seeded in-memory SQLite, cannot reach real Postgres, requests serialised by a lock). Fixed an older bug where `hidden` elements stayed visible (pager, quick-entry preview) with a global `[hidden]` rule. Two review rounds; round 1 findings (race on digest requests, unescaped count, demo server env, NaN delta, accessibility, duplicated handler) all fixed; round 2 found nothing serious. 18 client tests and 56 backend tests pass; verified in Chrome against the demo server (digest renders and matches hand-checked numbers, tap-a-day, quick entry end to end, pager hidden). Not verified: phone width, dark mode, real Postgres. The done-check command is now `node --test` because `node --test tests/` fails on Node 24 (same check). Journal: `journal/2026-10-09-daily-insights-client.md`.
 
 ## 4. Auth and Mac push ingestion  [ ]
 Why: once hosted, the API is on the internet and the Mac must send to it.
@@ -62,7 +62,7 @@ Why: reads are now token-protected, so the static client needs to ask for the re
 Touches: `D:\repos\RBCheck-client`: `js/api.js` (sends `Authorization: Bearer`), `js/app.js`, `index.html`, `css/styles.css`, `README.md`.
 Rules: the token is entered once and kept in `localStorage` (wrapped in try/catch); a 401 shows the unlock prompt again; the token never appears in the URL.
 Blockers: none
-Done-check: `node --test tests/` -> all pass, including a test that a 401 clears the stored token and triggers the prompt; `node --check js/*.js` -> no output.
+Done-check: `node --test` -> all pass, including a test that a 401 clears the stored token and triggers the prompt; `node --check js/*.js` -> no output.
 Report:
 
 ## 6. Containers: Dockerfile and compose  [ ]

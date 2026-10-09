@@ -99,6 +99,14 @@ python -m app.scripts.backfill   # one-time import of full chat.db history
 python -m app.scripts.poller     # long-running, polls every 5 seconds
 ```
 
+### Demo server (no Postgres, no real data)
+
+```bash
+python -m app.scripts.demo_server   # http://127.0.0.1:8000
+```
+
+Runs the real API on an in-memory SQLite database seeded with made-up spending, so the [client](../RBCheck-client) can be tried without Postgres or any of your data. Everything resets when it stops.
+
 ### Dev utility: `copy_chat_db.py`
 
 `app/database.py` connects to `~/Library/Messages/chat.db` on every platform except Windows, where it falls back to a local `transactions.db` file (since there's no real iMessage database to read). To populate `transactions.db` for local testing, run `copy_chat_db.py` on a Mac that has the real `chat.db`, then copy the resulting `transactions.db` file into the `RBCheck/` root on Windows.
