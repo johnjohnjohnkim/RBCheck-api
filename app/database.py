@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 import os, sys, sqlite3
@@ -7,9 +8,17 @@ from .config import env
 
 ##### For Postgres Database Connection #######
 
-PG_DB_URL = f"postgresql+psycopg://{env.DATABASE_USERNAME}:{env.DATABASE_PASSWORD}@{env.IP_ADDRESS}:{env.DATABASE_PORT}/{env.DATABASE_NAME}"
+# URL.create escapes special characters in the password
+PG_DB_URL = URL.create(
+    "postgresql+psycopg",
+    username=env.DATABASE_USERNAME,
+    password=env.DATABASE_PASSWORD,
+    host=env.db_host,
+    port=env.DATABASE_PORT,
+    database=env.DATABASE_NAME,
+)
 
-engine = create_engine(PG_DB_URL)
+engine = create_engine(PG_DB_URL, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -24,15 +33,16 @@ def get_db():
 
 
 ####### For SQLite "Chat.db" Connection #######
+# Opened on demand by the ingestion scripts only, so the API can run anywhere.
 
-if sys.platform == "win32":
-    # For testing on Windows, you must have a copy of the database from copy_chat_db.py!!
-    database = os.path.join(os.path.dirname(__file__), '..', 'transactions.db')
-else:
-    database = os.path.expanduser("~/Library/Messages/chat.db")
+def chat_db_path() -> str:
+    if env.RBC_CHATDB_PATH:
+        return env.RBC_CHATDB_PATH
+    if sys.platform == "win32":
+        # For testing on Windows, you must have a copy of the database from copy_chat_db.py!!
+        return os.path.join(os.path.dirname(__file__), '..', 'transactions.db')
+    return os.path.expanduser("~/Library/Messages/chat.db")
 
-conn = sqlite3.connect(database)
-litecursor = conn.cursor()
 
-def close_db():
-    conn.close()
+def open_chat_db() -> sqlite3.Connection:
+    return sqlite3.connect(chat_db_path())

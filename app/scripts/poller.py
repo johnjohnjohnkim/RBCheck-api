@@ -1,59 +1,41 @@
 import time
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 
-from ..database import litecursor
-from ..routers.transactions import send_transaction
-from ..sms_parser import parseTransaction, transactionAnalysis
-from ..database import SessionLocal, litecursor
-from ..services.transaction_services import filter_cc_payment_duplicates
-from .. import schemas
-from ..import models
+from ..config import env
+from ..database import SessionLocal, open_chat_db
+from ..services.transaction_services import get_ingest_cursor
+from .ingest import fetch_messages, ingest_rows
 
-db = SessionLocal()
-
-litequery = "SELECT MAX(m.ROWID) " \
-"FROM message as m, handle as h " \
-"WHERE h.id=72272 AND h.ROWID=m.handle_id"
+POLL_SECONDS = 5
 
 
-while True:
-    litecursor.execute(litequery)
+def poll_once(db, chat_conn, cursor: int) -> int:
+    """Ingest messages newer than cursor and return the new cursor.
 
-    literesult = litecursor.fetchone()[0]
-    pgresult = db.query(func.max(models.Transaction.transaction_id)).scalar()
-    
-    if pgresult != literesult:
-        print("New transactions found!")
-
-        lite_get_new_queries = "SELECT m.ROWID, datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime'), m.attributedBody " \
-        "FROM message as m, handle as h " \
-        f"WHERE h.id=72272 AND h.ROWID=m.handle_id AND m.ROWID > {pgresult} " \
-        "ORDER BY m.date DESC;" 
-
-        litecursor.execute(lite_get_new_queries)
-        result = litecursor.fetchall()
-
-        batch = []
-        for trans in result:
-            analysis = transactionAnalysis(parseTransaction(str(trans[2]).upper()))
-            batch.append({
-                "transaction_id": trans[0],
-                "transaction_datetime": trans[1],
-                "amount": analysis[0],
-                "place": analysis[1],
-                "transaction_type": analysis[2],
-            })
-
-        for transaction in filter_cc_payment_duplicates(batch, db):
-            send_transaction(schemas.Transaction(**transaction), db)
-    
-    time.sleep(5)
-    
+    The cursor advances past messages that were skipped (non-transactions,
+    filtered duplicates), so they are not re-read on every tick.
+    """
+    rows = fetch_messages(chat_conn, env.RBC_HANDLE_ID, cursor)
+    if not rows:
+        return cursor
+    inserted = ingest_rows(db, rows)
+    print(f"Read {len(rows)} new messages, stored {inserted} transactions.")
+    return rows[-1][0]
 
 
+def main():
+    db = SessionLocal()
+    chat_conn = open_chat_db()
+    cursor = get_ingest_cursor(db)
 
-        
+    while True:
+        try:
+            cursor = poll_once(db, chat_conn, cursor)
+        except Exception as exc:
+            # Cursor is unchanged, so the same rows are retried next tick.
+            db.rollback()
+            print(f"Poll failed, will retry: {exc!r}")
+        time.sleep(POLL_SECONDS)
 
 
-
+if __name__ == "__main__":
+    main()

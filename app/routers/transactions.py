@@ -7,12 +7,31 @@ from typing import List
 from datetime import datetime, time, timedelta, date
 from decimal import Decimal
 from calendar import day_name
-from ..services.transaction_services import build_datetime_range
+from fastapi import Query
+from sqlalchemy.exc import DataError, IntegrityError
+from ..services.transaction_services import build_datetime_range, insert_transaction
 
 router = APIRouter(
     prefix="/transactions",
     tags=["transactions"]
 )
+
+
+def _parse_date(value: str, fmt: str) -> date:
+    try:
+        return datetime.strptime(value, fmt).date()
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid date '{value}', expected format {fmt}.",
+        )
+
+
+def _out_of_range() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail="A value is out of range (amounts are limited to 99,999,999.99).",
+    )
 
 @router.get("/summary", status_code=status.HTTP_200_OK, response_model=schemas.SpendingDisplay)
 def sendSummary(db: Session = Depends(get_db)):
@@ -36,8 +55,8 @@ def sendSummary(db: Session = Depends(get_db)):
     )
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=List[schemas.Transaction])
-def get_all_transactions(offset: int, limit: int, db: Session = Depends(get_db)):
-    return db.query(models.Transaction).order_by(models.Transaction.transaction_datetime.desc()).offset(offset).limit(limit).all()
+def get_all_transactions(offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=1000), db: Session = Depends(get_db)):
+    return db.query(models.Transaction).order_by(models.Transaction.transaction_datetime.desc(), models.Transaction.transaction_id.desc()).offset(offset).limit(limit).all()
 
 
 @router.get("/date", status_code=status.HTTP_200_OK, response_model = List[schemas.Transaction])
@@ -47,7 +66,7 @@ def send_date_transactions(date_str: str = "", db: Session = Depends(get_db)):
     if date_str == "":
         date_str = datetime.now().strftime('%m/%d/%Y')
 
-    casted_date = datetime.strptime(date_str, '%m/%d/%Y').date()
+    casted_date = _parse_date(date_str, '%m/%d/%Y')
     day_max, day_min = build_datetime_range(casted_date)
 
     results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime <= day_max, models.Transaction.transaction_datetime >= day_min).all()
@@ -56,12 +75,20 @@ def send_date_transactions(date_str: str = "", db: Session = Depends(get_db)):
 
 
 @router.post("", status_code = status.HTTP_201_CREATED, response_model=schemas.Transaction)
-def send_transaction(transactions: schemas.Transaction, db: Session = Depends(get_db)):
-    new_transaction = models.Transaction(**transactions.model_dump())
-
-    db.add(new_transaction)
-    db.commit()
-    db.refresh(new_transaction)
+def send_transaction(transactions: schemas.TransactionCreate, db: Session = Depends(get_db)):
+    detail = (f"Transaction {transactions.transaction_id} already exists."
+              if transactions.transaction_id is not None else "Could not allocate an id, try again.")
+    conflict = HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+    try:
+        new_transaction = insert_transaction(db, transactions)
+    except IntegrityError:
+        db.rollback()
+        raise conflict
+    except DataError:
+        db.rollback()
+        raise _out_of_range()
+    if new_transaction is None:
+        raise conflict
 
     return new_transaction
 
@@ -71,12 +98,16 @@ def update_transaction(id: int, updated_input: schemas.UpdateTransaction, db: Se
     if not transaction:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction could not be found.")
      
-    updated_transaction = updated_input.model_dump(exclude_unset=True)
+    updated_transaction = updated_input.model_dump(exclude_unset=True, exclude_none=True)
 
     for key, value in updated_transaction.items():
         setattr(transaction, key, value)
 
-    db.commit()
+    try:
+        db.commit()
+    except DataError:
+        db.rollback()
+        raise _out_of_range()
     db.refresh(transaction)
     return transaction
 
@@ -118,11 +149,11 @@ def current_month_transactions(db: Session = Depends(get_db)):
 @router.get("/date_range", response_model=List[schemas.Transaction])
 def transactions_by_date_range(start_date: str, end_date: str = None, db: Session = Depends(get_db)):
 
-    dt_start = datetime.strptime(start_date, '%Y-%m-%d').date()
+    dt_start = _parse_date(start_date, '%Y-%m-%d')
     if end_date is None:
         end_date = date.today()
-    else: 
-        end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+    else:
+        end_date = _parse_date(end_date, '%Y-%m-%d')
 
     day_max, day_min = build_datetime_range(dt_start, end_date)
     results = db.query(models.Transaction).filter(models.Transaction.transaction_datetime>= day_min, models.Transaction.transaction_datetime<=day_max).all()
@@ -131,7 +162,8 @@ def transactions_by_date_range(start_date: str, end_date: str = None, db: Sessio
 
 @router.get("/merchant", response_model = List[schemas.Transaction])
 def transactions_at_merchant(merchant: str, db: Session = Depends(get_db)):
-    results = db.query(models.Transaction).filter(models.Transaction.place.ilike(f'%{merchant}%')).all()
+    escaped = merchant.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    results = db.query(models.Transaction).filter(models.Transaction.place.ilike(f'%{escaped}%', escape="\\")).all()
 
     return results
     

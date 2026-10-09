@@ -65,14 +65,14 @@ Fill in `app/.env`:
 
 | Variable | Description |
 |---|---|
-| `DATABASE_HOSTNAME` | Not currently read (see note below) |
+| `DATABASE_HOSTNAME` | Postgres host |
 | `DATABASE_PORT` | Postgres port |
 | `DATABASE_USERNAME` | Postgres role |
 | `DATABASE_PASSWORD` | Postgres password |
 | `DATABASE_NAME` | Database name |
-| `IP_ADDRESS` | Postgres host — the connection string in `app/database.py` uses this, not `DATABASE_HOSTNAME` |
-
-> **Note:** `app/.env.example` also lists `DATABASE_POOL_SIZE`, `LISTEN_HOST`, `LISTEN_PORT`, `RBC_HANDLE_ID`, and `RBC_CHATDB_PATH`, but none of these are read by `app/config.py` or referenced elsewhere in the code. The iMessage handle ROWID for the RBC sender and the `chat.db` path are currently hardcoded in `app/scripts/backfill.py` and `app/scripts/poller.py` rather than configurable via environment variables.
+| `IP_ADDRESS` | Optional. Overrides `DATABASE_HOSTNAME` as the Postgres host |
+| `RBC_HANDLE_ID` | Optional. iMessage handle of the RBC sender (default `72272`) |
+| `RBC_CHATDB_PATH` | Optional. Path to `chat.db` (default `~/Library/Messages/chat.db`) |
 
 ## Running
 
@@ -100,7 +100,7 @@ docker build -f rbcheck.dockerfile -t rbcheck .
 docker run --env-file app/.env -p 8000:8000 rbcheck
 ```
 
-> **Note:** `rbcheck.dockerfile` runs `uvicorn main:app`, but the FastAPI app lives at `app/main.py` (i.e. `app.main:app`), not a root-level `main.py`. As written, the container command will fail to find the app.
+The image contains only the API (`app/`). It does not include `chat.db`, so ingestion (`backfill`/`poller`) still runs on the Mac.
 
 ## API
 
@@ -125,4 +125,9 @@ CORS is restricted to `gwanwoo.dev`, its subdomains, and `localhost`/`127.0.0.1`
 
 ## Tests
 
-No test suite is currently present in this repository.
+```bash
+pip install pytest
+python -m pytest
+```
+
+The tests use in-memory SQLite and never touch Postgres or your real `chat.db`.

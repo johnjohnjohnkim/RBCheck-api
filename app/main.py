@@ -1,17 +1,20 @@
-from fastapi import FastAPI, Response, status, HTTPException
+from fastapi import FastAPI
 
 from . import models
 from .database import engine
 from .routers import transactions
 
 from contextlib import asynccontextmanager
-from .database import conn
 from fastapi.middleware.cors import CORSMiddleware
 
 
-models.Base.metadata.create_all(bind=engine)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    models.Base.metadata.create_all(bind=engine)
+    yield
 
-app = FastAPI()
+
+app = FastAPI(lifespan=lifespan)
 
 origins = [
     "https://gwanwoo.dev",
@@ -28,9 +31,3 @@ app.add_middleware(
 )
 
 app.include_router(transactions.router)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    yield
-    conn.close()

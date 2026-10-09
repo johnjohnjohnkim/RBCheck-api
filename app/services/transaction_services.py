@@ -1,22 +1,67 @@
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from datetime import datetime, time, timedelta
 from decimal import Decimal
-from .. import models
+from .. import models, schemas
+
+# transaction_id is a 32-bit INTEGER. Ids from MANUAL_ID_FLOOR up are reserved
+# for manual entries. The poller cursor ignores that range so a manual entry
+# can't make it skip real messages.
+MANUAL_ID_FLOOR = schemas.MANUAL_ID_FLOOR
+
 
 def build_datetime_range(start_date, end_date=None):
-
-    day_max = datetime.combine(start_date, time.max)
+    """Returns (day_max, day_min). The two dates may be given in either order."""
     if end_date is None:
-        day_min = datetime.combine(start_date, time.min)
-    else:
-        day_min = datetime.combine(end_date, time.min)
-    return day_max, day_min
+        end_date = start_date
+    first, last = sorted((start_date, end_date))
+    return datetime.combine(last, time.max), datetime.combine(first, time.min)
 
 
 def _parse_dt(dt):
     if isinstance(dt, str):
         return datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
     return dt
+
+
+def get_ingest_cursor(db: Session) -> int:
+    """Highest iMessage ROWID already stored (manual entries excluded)."""
+    return db.query(func.max(models.Transaction.transaction_id)).filter(
+        models.Transaction.transaction_id < MANUAL_ID_FLOOR
+    ).scalar() or 0
+
+
+def next_manual_id(db: Session) -> int:
+    highest = db.query(func.max(models.Transaction.transaction_id)).filter(
+        models.Transaction.transaction_id >= MANUAL_ID_FLOOR
+    ).scalar()
+    return (highest or MANUAL_ID_FLOOR - 1) + 1
+
+
+def insert_transaction(db: Session, transaction: schemas.TransactionCreate) -> models.Transaction | None:
+    """Idempotent insert. Returns None if the id already exists.
+    A transaction without an id gets the next id in the manual range."""
+    data = transaction.model_dump()
+    assigned = data["transaction_id"] is None
+    for attempt in range(3):
+        if assigned:
+            data["transaction_id"] = next_manual_id(db)
+        elif db.get(models.Transaction, data["transaction_id"]) is not None:
+            return None
+        row = models.Transaction(**data)
+        db.add(row)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            if not assigned:
+                return None  # someone else stored this id first
+            if attempt == 2:
+                raise
+            continue  # two manual inserts picked the same id; pick again
+        db.refresh(row)
+        return row
 
 
 def filter_cc_payment_duplicates(transactions, db=None):
