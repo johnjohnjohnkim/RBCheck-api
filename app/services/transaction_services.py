@@ -1,9 +1,10 @@
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from .. import models, schemas
+from .clock import app_tz
 
 # transaction_id is a 32-bit INTEGER. Ids from MANUAL_ID_FLOOR up are reserved
 # for manual entries. The poller cursor ignores that range so a manual entry
@@ -21,8 +22,8 @@ def build_datetime_range(start_date, end_date=None):
 
 def _parse_dt(dt):
     if isinstance(dt, str):
-        return datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
-    return dt
+        dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=app_tz())
 
 
 def get_ingest_cursor(db: Session) -> int:
@@ -102,3 +103,12 @@ def filter_cc_payment_duplicates(transactions, db=None):
 
         filtered.append(t)
     return filtered
+
+
+def transactions_between(db: Session, first: date, last: date) -> list[models.Transaction]:
+    """All transactions on the calendar days first..last (inclusive), oldest first."""
+    day_max, day_min = build_datetime_range(last, first)
+    return db.query(models.Transaction).filter(
+        models.Transaction.transaction_datetime >= day_min,
+        models.Transaction.transaction_datetime <= day_max,
+    ).order_by(models.Transaction.transaction_datetime, models.Transaction.transaction_id).all()

@@ -9,6 +9,8 @@ from decimal import Decimal
 from calendar import day_name
 from fastapi import Query
 from sqlalchemy.exc import DataError, IntegrityError
+from ..services import clock
+from ..services.insights import spending_summary
 from ..services.transaction_services import build_datetime_range, insert_transaction
 
 router = APIRouter(
@@ -35,24 +37,7 @@ def _out_of_range() -> HTTPException:
 
 @router.get("/summary", status_code=status.HTTP_200_OK, response_model=schemas.SpendingDisplay)
 def sendSummary(db: Session = Depends(get_db)):
-    curr = date.today()
-
-    EXCLUDED_TYPES = ('Credit Card Payment', 'Deposit')
-
-    def query_sum(day_max, day_min):
-        result = db.query(func.sum(models.Transaction.amount)).filter(
-            models.Transaction.transaction_datetime >= day_min,
-            models.Transaction.transaction_datetime <= day_max,
-            models.Transaction.transaction_type.notin_(EXCLUDED_TYPES)
-        ).scalar()
-        return result or Decimal(0)
-
-    return schemas.SpendingDisplay(
-        daily=query_sum(*build_datetime_range(curr)),
-        weekly=query_sum(*build_datetime_range(curr, curr - timedelta(days=curr.weekday()))),
-        rolling=query_sum(*build_datetime_range(curr, curr - timedelta(days=7))),
-        monthly=query_sum(*build_datetime_range(curr, curr - timedelta(days=curr.day - 1))),
-    )
+    return spending_summary(db, clock.today())
 
 @router.get("/", status_code=status.HTTP_200_OK, response_model=List[schemas.Transaction])
 def get_all_transactions(offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=1000), db: Session = Depends(get_db)):
@@ -64,7 +49,7 @@ def send_date_transactions(date_str: str = "", db: Session = Depends(get_db)):
 
     # Defaults to current date if no date is provided
     if date_str == "":
-        date_str = datetime.now().strftime('%m/%d/%Y')
+        date_str = clock.today().strftime('%m/%d/%Y')
 
     casted_date = _parse_date(date_str, '%m/%d/%Y')
     day_max, day_min = build_datetime_range(casted_date)
@@ -117,8 +102,8 @@ def current_week_transactions(db: Session = Depends(get_db)):
     # can definitely just make it toggle it's no biggie
 
     # STARTING FROM MONDAY
-    curr_date = date.today()
-    start = curr_date - timedelta(date.today().weekday())
+    curr_date = clock.today()
+    start = curr_date - timedelta(clock.today().weekday())
 
     day_max, day_min = build_datetime_range(curr_date, start)
 
@@ -128,8 +113,8 @@ def current_week_transactions(db: Session = Depends(get_db)):
 
 @router.get("/past_7_days", response_model=List[schemas.Transaction])
 def past_7_days_transactions(db: Session = Depends(get_db)):
-    curr = date.today()
-    start = curr - timedelta(days=7)
+    curr = clock.today()
+    start = curr - timedelta(days=6)  # seven days including today
 
     day_max, day_min = build_datetime_range(curr, start)
 
@@ -138,7 +123,7 @@ def past_7_days_transactions(db: Session = Depends(get_db)):
 
 @router.get("/month", response_model=List[schemas.Transaction])
 def current_month_transactions(db: Session = Depends(get_db)):
-    curr = date.today()
+    curr = clock.today()
     start = curr - timedelta(days=curr.day-1)
 
     day_max, day_min = build_datetime_range(curr, start)
@@ -151,7 +136,7 @@ def transactions_by_date_range(start_date: str, end_date: str = None, db: Sessio
 
     dt_start = _parse_date(start_date, '%Y-%m-%d')
     if end_date is None:
-        end_date = date.today()
+        end_date = clock.today()
     else:
         end_date = _parse_date(end_date, '%Y-%m-%d')
 

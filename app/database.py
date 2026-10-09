@@ -18,7 +18,13 @@ PG_DB_URL = URL.create(
     database=env.DATABASE_NAME,
 )
 
-engine = create_engine(PG_DB_URL, pool_pre_ping=True)
+# The session timezone makes Postgres read the naive local times we store (and the
+# naive day boundaries we query with) as TIMEZONE, wherever the server runs.
+engine = create_engine(
+    PG_DB_URL,
+    pool_pre_ping=True,
+    connect_args={"options": f"-c timezone={env.TIMEZONE}"},
+)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

@@ -71,8 +71,18 @@ Fill in `app/.env`:
 | `DATABASE_PASSWORD` | Postgres password |
 | `DATABASE_NAME` | Database name |
 | `IP_ADDRESS` | Optional. Overrides `DATABASE_HOSTNAME` as the Postgres host |
+| `TIMEZONE` | Optional. Zone the bank texts are written in, default `America/Toronto`. Decides what "today" means and how Postgres reads stored times, independent of the server's own timezone |
 | `RBC_HANDLE_ID` | Optional. iMessage handle of the RBC sender (default `72272`) |
 | `RBC_CHATDB_PATH` | Optional. Path to `chat.db` (default `~/Library/Messages/chat.db`) |
+
+## Upgrading an existing database (timezone)
+
+The API now sets the Postgres session timezone to `TIMEZONE` (default `America/Toronto`), and ingestion stamps each new transaction with an explicit timezone, so new rows are right wherever the Mac or the server runs. Rows stored by the older ingestion were *naive* local times, which Postgres read in whatever its own timezone was at the time. Before running this version against an existing database, run `SHOW timezone;` in `psql`:
+
+- It already shows your zone (e.g. `America/Toronto`): nothing to do.
+- It shows `UTC` (typical for Docker): the old rows were stored as if local time were UTC and will now read hours off, some on the wrong day. Back up first, then run this **exactly once** (running it again shifts every row a second time), ideally inside a transaction (`BEGIN; ... COMMIT;`) so you can check a few rows before committing:
+  `UPDATE transactions SET transaction_datetime = (transaction_datetime AT TIME ZONE 'UTC') AT TIME ZONE 'America/Toronto';`
+- Anything else: work out which zone the old rows were interpreted in and substitute it for `'UTC'` above.
 
 ## Running
 
@@ -118,8 +128,14 @@ All endpoints are under `/transactions` (see `app/routers/transactions.py` for f
 | GET | `/transactions/merchant?merchant=` | Case-insensitive merchant search |
 | GET | `/transactions/price_range?range_start=&range_end=` | Transactions within an amount range |
 | GET | `/transactions/{id}` | Single transaction |
+| GET | `/insights/today` | Today's digest (recomputed on each call): spend, change vs the previous 7-day average, top merchants, month-to-date and projected month-end, unusual charges |
+| GET | `/insights/history?days=30` | Digests for recent days, newest first. Past days are computed once and stored in `daily_digests` |
 | POST | `/transactions` | Create a transaction |
 | PATCH | `/transactions/{id}` | Partially update a transaction |
+
+Spending counts purchases and withdrawals, subtracts refunds, and ignores deposits and credit card payments (`app/services/spending.py`). "Rolling 7 days" is the last seven days including today.
+
+To rebuild stored digests (for example after editing old transactions) run `python -m app.scripts.digest --days 30`; with no flag it just stores today's.
 
 CORS is restricted to `gwanwoo.dev`, its subdomains, and `localhost`/`127.0.0.1` (see `app/main.py`).
 

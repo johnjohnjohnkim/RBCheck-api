@@ -2,7 +2,7 @@ from fastapi import FastAPI
 
 from . import models
 from .database import engine
-from .routers import transactions
+from .routers import insights, transactions
 
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,3 +31,4 @@ app.add_middleware(
 )
 
 app.include_router(transactions.router)
+app.include_router(insights.router)

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 from decimal import Decimal
 
@@ -35,3 +35,27 @@ class SpendingDisplay(BaseModel):
     weekly: Decimal
     rolling: Decimal
     monthly: Decimal
+
+class DigestMerchant(BaseModel):
+    name: str
+    total: Decimal
+    count: int
+
+class DigestUnusual(BaseModel):
+    transaction_id: int
+    place: str
+    amount: Decimal
+    reason: str
+
+class Digest(BaseModel):
+    day: date
+    spend: Decimal
+    avg_previous_7: Decimal
+    pct_vs_avg: float | None
+    top_merchants: list[DigestMerchant]
+    month_to_date: Decimal
+    projected_month_end: Decimal | None   # null until enough days have completed
+    final: bool                           # false while the day is still in progress
+    purchase_count: int
+    unusual: list[DigestUnusual]
+    computed_at: datetime
