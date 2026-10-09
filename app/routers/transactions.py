@@ -1,5 +1,6 @@
 from .. import models, schemas
 from fastapi import status, HTTPException, Depends, APIRouter
+from ..auth import require_read, require_write
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from ..database import get_db
@@ -15,7 +16,8 @@ from ..services.transaction_services import build_datetime_range, insert_transac
 
 router = APIRouter(
     prefix="/transactions",
-    tags=["transactions"]
+    tags=["transactions"],
+    dependencies=[Depends(require_read)],
 )
 
 
@@ -59,7 +61,8 @@ def send_date_transactions(date_str: str = "", db: Session = Depends(get_db)):
     return results
 
 
-@router.post("", status_code = status.HTTP_201_CREATED, response_model=schemas.Transaction)
+@router.post("", status_code = status.HTTP_201_CREATED, response_model=schemas.Transaction,
+             dependencies=[Depends(require_write)])
 def send_transaction(transactions: schemas.TransactionCreate, db: Session = Depends(get_db)):
     detail = (f"Transaction {transactions.transaction_id} already exists."
               if transactions.transaction_id is not None else "Could not allocate an id, try again.")
@@ -77,7 +80,8 @@ def send_transaction(transactions: schemas.TransactionCreate, db: Session = Depe
 
     return new_transaction
 
-@router.patch("/{id}", response_model=schemas.Transaction, status_code=status.HTTP_200_OK)
+@router.patch("/{id}", response_model=schemas.Transaction, status_code=status.HTTP_200_OK,
+              dependencies=[Depends(require_write)])
 def update_transaction(id: int, updated_input: schemas.UpdateTransaction, db: Session = Depends(get_db)):
     transaction = db.query(models.Transaction).filter(models.Transaction.transaction_id == id).first()
     if not transaction:

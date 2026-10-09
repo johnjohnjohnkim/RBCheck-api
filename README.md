@@ -1,151 +1,170 @@
 # RBCheck
 
-A FastAPI backend that turns RBC (Royal Bank of Canada) SMS transaction alerts into a structured, queryable spending ledger.
+A FastAPI backend that turns RBC (Royal Bank of Canada) SMS transaction alerts into a spending ledger with daily insights, plus the Mac-side script that feeds it.
 
-RBC sends a text for every purchase, withdrawal, deposit, and credit card payment. On macOS those texts land in the iMessage database (`chat.db`). RBCheck reads that SQLite database, parses each message's embedded text for the amount/merchant/transaction type, and writes the result into a Postgres table that a REST API exposes to the [RBCheck-client](../RBCheck-client) frontend.
+RBC sends a text for every purchase, withdrawal, deposit, and credit card payment. On macOS those texts land in the iMessage database (`chat.db`). A script on the Mac reads them, parses each one, and **pushes** the result over HTTPS to the API, which stores it in Postgres and serves it to the [RBCheck-client](../RBCheck-client) page.
+
+```
+iPhone SMS → iMessage → MacBook ──(parse, HTTPS + write token)──▶ API ──▶ Postgres
+                                                                    ▲
+                                              browser page ─(read token)┘
+```
+
+The API and Postgres can live anywhere (the plan is one small AWS instance running Docker). The Mac needs no database access, only the API's address and a token. If the Mac is off, the site still serves all history; the poller catches up when it comes back.
 
 ## How it works
 
-1. **Ingestion** (`app/scripts/poller.py` or `app/scripts/backfill.py`) reads new rows from the `message`/`handle` tables in `chat.db` for the RBC SMS sender.
-2. **Parsing** (`app/sms_parser.py`) extracts the readable text from each message's `attributedBody` blob, then regexes out the dollar amount, merchant name, and transaction type (`Deposit`, `Withdrawal`, `CC Purchase`, `Credit Card Payment`, `Credit Refund`, or a balance-warning marker).
-3. **Deduplication** (`app/services/transaction_services.py`) drops `Withdrawal` rows that are really the settlement side of a `Credit Card Payment` seen within 60 seconds, checking both the current batch and existing Postgres rows.
-4. **Storage** — each parsed transaction is inserted into Postgres via the `POST /transactions` endpoint, using a single SQLAlchemy `Transaction` model (`app/models.py`).
-5. **API** (`app/routers/transactions.py`) serves summaries and filtered transaction lists to the client.
+1. **Parsing, on the Mac** (`app/sms_parser.py`, `app/scripts/pusher.py`). Each message's `attributedBody` is decoded, then the amount, merchant and type are extracted (`Deposit`, `Withdrawal`, `CC Purchase`, `Credit Card Payment`, `Credit Refund`). Messages that are not transactions (balance warnings, "card is due" notices) are skipped. Each time is sent with an explicit timezone offset, whatever timezone the Mac is in.
+2. **Pushing** (`app/scripts/poller.py`, `backfill.py`). The poller asks the API for the last message id it has (`GET /ingest/cursor`), then sends anything newer in batches (`POST /ingest/batch`). The cursor only moves after the server accepts a batch. If the server is down it retries with a growing delay (up to 5 minutes) and loses nothing.
+3. **Storing** (`app/services/ingestion.py`). Each record is validated on its own: a bad one is reported back and skipped, it never blocks the rest. Repeats are ignored. A `Withdrawal` that is really the settlement side of a `Credit Card Payment` (same amount within 60 seconds) is dropped whichever of the two arrives first. Pairing is one-to-one: a payment absorbs at most one withdrawal (the closest), so two genuine withdrawals of the same amount are not both lost, and a payment and the removal of its withdrawal are committed together. Manual entries are never removed.
+4. **Insights** (`app/services/insights.py`). One digest per local day: spend, change vs the previous 7-day average, top merchants, month-to-date and month-end pace, unusual charges.
+5. **API** (`app/routers/`). Summaries, lists and digests for the client, all behind bearer tokens.
 
 ## Tech stack
 
-- **FastAPI** + **Uvicorn** — HTTP API and ASGI server
-- **SQLAlchemy** + **psycopg** — Postgres ORM/driver for the transactions table
-- **Pydantic / pydantic-settings** — request/response schemas and env-based config
-- **sqlite3** (stdlib) — read-only access to the iMessage `chat.db`
-
-See `requirements.txt` for exact pinned versions.
+FastAPI + Uvicorn, SQLAlchemy + psycopg (Postgres), Pydantic / pydantic-settings, httpx (the Mac pusher), sqlite3 (reading `chat.db`). Exact versions in `requirements.txt`.
 
 ## Project structure
 
 ```
 RBCheck/
 ├── app/
-│   ├── main.py                       FastAPI app, CORS config, router registration
-│   ├── config.py                     Env settings (pydantic-settings, reads .env)
-│   ├── database.py                   Postgres engine/session + SQLite chat.db connection
-│   ├── models.py                     SQLAlchemy Transaction model
-│   ├── schemas.py                    Pydantic schemas (Transaction, UpdateTransaction, SpendingDisplay, Date)
-│   ├── sms_parser.py                 Extracts transaction text + amount/merchant/type from iMessage bodies
-│   ├── routers/
-│   │   └── transactions.py           /transactions REST endpoints
-│   ├── services/
-│   │   └── transaction_services.py   Date-range helper + CC-payment/withdrawal de-duplication
+│   ├── main.py            App, CORS, routers, /healthz (docs are off unless ENABLE_DOCS=true)
+│   ├── config.py          Server settings (reads .env) - tokens are required
+│   ├── auth.py            Bearer-token checks (read / write)
+│   ├── database.py        Postgres engine and session
+│   ├── models.py          Transaction and DailyDigest tables
+│   ├── schemas.py         Request/response models
+│   ├── sms_parser.py      iMessage text -> amount / merchant / type
+│   ├── routers/           transactions.py, insights.py, ingest.py
+│   ├── services/          clock, spending rules, insights, ingestion, transaction helpers
 │   └── scripts/
-│       ├── backfill.py               One-time import of all historical RBC texts into Postgres
-│       └── poller.py                 Polls chat.db every 5s and pushes new transactions
-├── copy_chat_db.py                   Dev utility: copies handle/message tables out of chat.db for testing off macOS
-├── rbcheck.dockerfile                Container build for the API
+│       ├── pusher.py      Mac side: read chat.db, parse, push (needs no database settings)
+│       ├── poller.py      python -m app.scripts.poller    (runs forever)
+│       ├── backfill.py    python -m app.scripts.backfill  (one-off history import)
+│       ├── digest.py      python -m app.scripts.digest    (store digests; for a daily cron)
+│       └── demo_server.py Real API on made-up data, no Postgres
+├── tests/                 pytest suite (SQLite; never touches Postgres or your messages)
+├── copy_chat_db.py        Dev utility: copy handle/message tables out of chat.db
+├── rbcheck.dockerfile
 └── requirements.txt
 ```
 
-## Prerequisites
-
-- Python 3.11+ (the Docker image uses `python:3.11-slim`)
-- A running Postgres instance
-- macOS with iMessage forwarding set up for the RBC SMS shortcode (for live ingestion) — on other platforms, a copy of `chat.db`'s `handle`/`message` tables (see [Dev utility: `copy_chat_db.py`](#dev-utility-copy_chat_dbpy))
-
-## Setup
+## Setup: the server (API + Postgres)
 
 ```bash
 python -m venv venv
 venv\Scripts\activate        # Windows
 # source venv/bin/activate   # macOS/Linux
-
 pip install -r requirements.txt
-cp app/.env.example app/.env
+cp app/.env.example .env     # then fill it in; see app/.env.example for every variable
 ```
 
-Fill in `app/.env`:
+Required: the `DATABASE_*` settings and two tokens, `READ_TOKEN` and `WRITE_TOKEN` (each at least 24 characters, and different). The app refuses to start without them. Generate each with:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
 
 | Variable | Description |
 |---|---|
-| `DATABASE_HOSTNAME` | Postgres host |
-| `DATABASE_PORT` | Postgres port |
-| `DATABASE_USERNAME` | Postgres role |
-| `DATABASE_PASSWORD` | Postgres password |
-| `DATABASE_NAME` | Database name |
+| `DATABASE_HOSTNAME`, `DATABASE_PORT`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `DATABASE_NAME` | Postgres connection |
 | `IP_ADDRESS` | Optional. Overrides `DATABASE_HOSTNAME` as the Postgres host |
-| `TIMEZONE` | Optional. Zone the bank texts are written in, default `America/Toronto`. Decides what "today" means and how Postgres reads stored times, independent of the server's own timezone |
-| `RBC_HANDLE_ID` | Optional. iMessage handle of the RBC sender (default `72272`) |
-| `RBC_CHATDB_PATH` | Optional. Path to `chat.db` (default `~/Library/Messages/chat.db`) |
+| `READ_TOKEN` | Lets the browser page read. Also typed into the page's unlock screen |
+| `WRITE_TOKEN` | For the Mac poller (also allowed to read) |
+| `CORS_ORIGINS` | Comma-separated browser origins allowed to call the API, no wildcards. Default `https://gwanwoo.dev`. For local development add `http://127.0.0.1:3000` |
+| `TIMEZONE` | Zone the texts are written in, default `America/Toronto`. Decides what "today" means and how Postgres reads stored times |
+| `ENABLE_DOCS` | `true` serves `/docs` and `/openapi.json`; off by default |
+
+Start it:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+## Setup: the Mac (poller)
+
+On the MacBook that receives the texts, in a checkout of this repo (Python 3.11+, `pip install -r requirements.txt`). Give Terminal (or whatever runs the script) **Full Disk Access** so it can read `~/Library/Messages/chat.db`. Create a `.env` with only:
+
+```
+RBCHECK_API_URL=https://api.rbcheck.gwanwoo.dev
+RBCHECK_WRITE_TOKEN=<the server's WRITE_TOKEN>
+```
+
+Optional: `RBC_HANDLE_ID` (default `72272`), `RBC_CHATDB_PATH`, `TIMEZONE`, `POLL_SECONDS` (default 5, minimum 1). No database credentials belong on the Mac. The poller reads `.env` from the directory you run it in, and it refuses a plain `http://` API address (except localhost) so the token can't travel in clear text.
+
+The poller keeps running through problems: if the server is down, returns an error, or `chat.db` is briefly unreadable, it logs the reason and retries with a growing delay (up to 5 minutes), then carries on. A message it cannot parse, or that the server rejects (for example one dated more than a day in the future because the Mac's clock was wrong), is logged and skipped permanently; fix the cause and run `backfill` again to resend everything. It warns if the server has newer message ids than `chat.db` does (for example after Messages was reset), because new texts would then not be sent until their ids catch up.
+
+```bash
+python -m app.scripts.backfill   # once: import the whole history (safe to repeat)
+python -m app.scripts.poller     # keep running: push new texts as they arrive
+```
+
+## Who can do what
+
+| Token | Reads (`GET`) | Writes (`POST`, `PATCH`, `/ingest/*`) |
+|---|---|---|
+| none / wrong | 401 | 401 |
+| `READ_TOKEN` | yes | 403 |
+| `WRITE_TOKEN` | yes | yes |
+
+Send it as `Authorization: Bearer <token>`. `/healthz` is the only route without a token. A missing token never reaches the database.
 
 ## Upgrading an existing database (timezone)
 
-The API now sets the Postgres session timezone to `TIMEZONE` (default `America/Toronto`), and ingestion stamps each new transaction with an explicit timezone, so new rows are right wherever the Mac or the server runs. Rows stored by the older ingestion were *naive* local times, which Postgres read in whatever its own timezone was at the time. Before running this version against an existing database, run `SHOW timezone;` in `psql`:
+The API sets the Postgres session timezone to `TIMEZONE`, and ingestion stamps each transaction with an explicit timezone, so new rows are right wherever the Mac or the server runs. Rows stored by the older ingestion were *naive* local times, which Postgres read in whatever its own timezone was at the time. Before running this version against an existing database, run `SHOW timezone;` in `psql`:
 
 - It already shows your zone (e.g. `America/Toronto`): nothing to do.
 - It shows `UTC` (typical for Docker): the old rows were stored as if local time were UTC and will now read hours off, some on the wrong day. Back up first, then run this **exactly once** (running it again shifts every row a second time), ideally inside a transaction (`BEGIN; ... COMMIT;`) so you can check a few rows before committing:
   `UPDATE transactions SET transaction_datetime = (transaction_datetime AT TIME ZONE 'UTC') AT TIME ZONE 'America/Toronto';`
 - Anything else: work out which zone the old rows were interpreted in and substitute it for `'UTC'` above.
 
-## Running
+Existing `Balance Warning!` rows from the old parser can be removed: `DELETE FROM transactions WHERE transaction_type = 'Balance Warning!';`
 
-Start the API:
+## API
 
-```bash
-uvicorn app.main:app --reload
-```
+All routes need a token (see above).
 
-Run ingestion (requires the API/Postgres to be reachable, since both scripts call the `send_transaction` handler directly):
+| Method | Path | Description |
+|---|---|---|
+| GET | `/transactions/summary` | Daily/weekly/rolling-7-day/monthly spend |
+| GET | `/transactions/` | Paginated list (`offset`, `limit`) |
+| GET | `/transactions/date?date_str=MM/DD/YYYY` | Transactions on a given date (defaults to today) |
+| GET | `/transactions/weekly` | Since Monday |
+| GET | `/transactions/past_7_days` | Last seven days including today |
+| GET | `/transactions/month` | Since the 1st of the month |
+| GET | `/transactions/date_range?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` | Arbitrary range |
+| GET | `/transactions/merchant?merchant=` | Case-insensitive merchant search |
+| GET | `/transactions/price_range?range_start=&range_end=` | Amount range |
+| GET | `/transactions/{id}` | One transaction |
+| GET | `/insights/today` | Today's digest (recomputed on each call) |
+| GET | `/insights/history?days=30` | Recent digests, newest first |
+| POST | `/transactions` | Create a manual entry (write token); the server assigns the id |
+| PATCH | `/transactions/{id}` | Partially update (write token) |
+| GET | `/ingest/cursor` | Highest stored message id (write token) |
+| POST | `/ingest/batch` | Push up to 500 parsed transactions (write token) |
+| GET | `/healthz` | Health check, no token |
 
-```bash
-python -m app.scripts.backfill   # one-time import of full chat.db history
-python -m app.scripts.poller     # long-running, polls every 5 seconds
-```
+Spending counts purchases and withdrawals, subtracts refunds, and ignores deposits and credit card payments (`app/services/spending.py`). Money values are JSON strings (`"50.00"`).
 
-### Demo server (no Postgres, no real data)
+To rebuild stored digests (for example after editing old transactions) run `python -m app.scripts.digest --days 30`. The default, 2 days, settles yesterday as well as today, so it suits a daily cron.
+
+## Demo server (no Postgres, no real data)
 
 ```bash
 python -m app.scripts.demo_server   # http://127.0.0.1:8000
 ```
 
-Runs the real API on an in-memory SQLite database seeded with made-up spending, so the [client](../RBCheck-client) can be tried without Postgres or any of your data. Everything resets when it stops.
+Runs the real API on an in-memory SQLite database of made-up spending. It prints its (public, fixed) read token for the client's unlock screen and allows the client at `http://127.0.0.1:3000`. Everything resets when it stops.
 
-### Dev utility: `copy_chat_db.py`
-
-`app/database.py` connects to `~/Library/Messages/chat.db` on every platform except Windows, where it falls back to a local `transactions.db` file (since there's no real iMessage database to read). To populate `transactions.db` for local testing, run `copy_chat_db.py` on a Mac that has the real `chat.db`, then copy the resulting `transactions.db` file into the `RBCheck/` root on Windows.
-
-### Docker
+## Docker
 
 ```bash
 docker build -f rbcheck.dockerfile -t rbcheck .
-docker run --env-file app/.env -p 8000:8000 rbcheck
+docker run --env-file .env -p 8000:8000 rbcheck
 ```
 
-The image contains only the API (`app/`). It does not include `chat.db`, so ingestion (`backfill`/`poller`) still runs on the Mac.
-
-## API
-
-All endpoints are under `/transactions` (see `app/routers/transactions.py` for full details):
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/transactions/summary` | Daily/weekly/rolling-7-day/monthly totals (excludes deposits and credit card payments) |
-| GET | `/transactions/` | Paginated list (`offset`, `limit`) |
-| GET | `/transactions/date?date_str=MM/DD/YYYY` | Transactions on a given date (defaults to today) |
-| GET | `/transactions/weekly` | Transactions since Monday |
-| GET | `/transactions/past_7_days` | Rolling 7-day window |
-| GET | `/transactions/month` | Transactions since the 1st of the month |
-| GET | `/transactions/date_range?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` | Transactions in an arbitrary range |
-| GET | `/transactions/merchant?merchant=` | Case-insensitive merchant search |
-| GET | `/transactions/price_range?range_start=&range_end=` | Transactions within an amount range |
-| GET | `/transactions/{id}` | Single transaction |
-| GET | `/insights/today` | Today's digest (recomputed on each call): spend, change vs the previous 7-day average, top merchants, month-to-date and projected month-end, unusual charges |
-| GET | `/insights/history?days=30` | Digests for recent days, newest first. Past days are computed once and stored in `daily_digests` |
-| POST | `/transactions` | Create a transaction |
-| PATCH | `/transactions/{id}` | Partially update a transaction |
-
-Spending counts purchases and withdrawals, subtracts refunds, and ignores deposits and credit card payments (`app/services/spending.py`). "Rolling 7 days" is the last seven days including today.
-
-To rebuild stored digests (for example after editing old transactions) run `python -m app.scripts.digest --days 30`; with no flag it just stores today's.
-
-CORS is restricted to `gwanwoo.dev`, its subdomains, and `localhost`/`127.0.0.1` (see `app/main.py`).
+The image contains only the API (`app/`); the Mac poller is not part of it.
 
 ## Tests
 
@@ -154,4 +173,4 @@ pip install pytest
 python -m pytest
 ```
 
-The tests use in-memory SQLite and never touch Postgres or your real `chat.db`.
+SQLite only: no Postgres, no real messages. They cover the parser, the API, auth on every route, the digests, and the poller against the real API (including server outages, wrong tokens and restarts).

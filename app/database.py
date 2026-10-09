@@ -2,8 +2,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-import os, sys, sqlite3
-
 from .config import env
 
 ##### For Postgres Database Connection #######
@@ -36,19 +34,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
-
-####### For SQLite "Chat.db" Connection #######
-# Opened on demand by the ingestion scripts only, so the API can run anywhere.
-
-def chat_db_path() -> str:
-    if env.RBC_CHATDB_PATH:
-        return env.RBC_CHATDB_PATH
-    if sys.platform == "win32":
-        # For testing on Windows, you must have a copy of the database from copy_chat_db.py!!
-        return os.path.join(os.path.dirname(__file__), '..', 'transactions.db')
-    return os.path.expanduser("~/Library/Messages/chat.db")
-
-
-def open_chat_db() -> sqlite3.Connection:
-    return sqlite3.connect(chat_db_path())

@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from conftest import WRITE_TOKEN, bearer
 from app import models
 from app.database import get_db
 from app.main import app
@@ -35,7 +36,7 @@ def client(Session, monkeypatch):
 
     app.dependency_overrides[get_db] = override
     monkeypatch.setattr(clock, "today", lambda now=None: DAY)
-    yield TestClient(app)
+    yield TestClient(app, headers=bearer(WRITE_TOKEN))
     app.dependency_overrides.clear()
 
 
@@ -259,33 +260,3 @@ def test_unknown_timezone_is_rejected_at_startup():
     with pytest.raises(ValidationError):
         Env(TIMEZONE="Mars/Olympus_Mons")
 
-
-def test_ingest_stamps_messages_with_the_app_timezone_not_the_machine_timezone(Session):
-    from app.scripts.ingest import ingest_rows
-
-    db = Session()
-    # 2026-07-05 03:30 UTC is 11:30pm on July 4 in Toronto, whatever zone this machine is in.
-    body = b"RBC: Purchase of $8.00 CAD made 07/04 at Late Night. STOP-TXT STOP/HELP-TXT HELP"
-    assert ingest_rows(db, [(1, 1783222200, body)]) == 1
-    stored = db.get(models.Transaction, 1).transaction_datetime
-    assert (stored.year, stored.month, stored.day, stored.hour, stored.minute) == (2026, 7, 4, 23, 30)
-
-
-def test_a_day_settles_two_hours_after_it_ends():
-    utc = timezone.utc
-    day = date(2026, 7, 10)  # ends at 04:00 UTC on Jul 11 in Toronto (EDT)
-    assert clock.settled(day, datetime(2026, 7, 11, 5, 59, tzinfo=utc)) is False
-    assert clock.settled(day, datetime(2026, 7, 11, 6, 0, tzinfo=utc)) is True
-
-
-def test_a_digest_is_not_cached_until_the_day_has_settled(Session, monkeypatch):
-    monkeypatch.setattr(clock, "settled", lambda day, now=None: False)
-    db = Session()
-    add(db, at(9, 12), "10.00", "A")
-    assert history(db, DAY, 1)[0].spend == Decimal("0.00")
-    add(db, at(10, 1), "4.00", "B")
-    assert history(db, DAY, 1)[0].spend == Decimal("4.00")   # recomputed, not served from the table
-    monkeypatch.undo()
-    assert history(db, date(2026, 7, 11), 2)[1].spend == Decimal("4.00")   # settled: cached from here on
-    add(db, at(10, 2), "1.00", "C")
-    assert history(db, date(2026, 7, 11), 2)[1].spend == Decimal("4.00")

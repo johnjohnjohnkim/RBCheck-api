@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field
-from datetime import date, datetime
-from typing import Optional
+from pydantic import BaseModel, Field, field_validator
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Literal, Optional
 from decimal import Decimal
 
 # iMessage ROWIDs stay far below this; ids from here up are server-assigned manual entries.
@@ -59,3 +59,36 @@ class Digest(BaseModel):
     purchase_count: int
     unusual: list[DigestUnusual]
     computed_at: datetime
+
+
+# What the Mac sends. Stricter than Transaction: a real iMessage id, a known type
+# and a positive amount that fits the column, so a bad record is rejected on its
+# own instead of failing the whole batch.
+class IngestItem(Transaction):
+    transaction_id: int = Field(ge=1, lt=MANUAL_ID_FLOOR)
+    transaction_type: Literal["CC Purchase", "Withdrawal", "Deposit", "Credit Card Payment", "Credit Refund"]
+    amount: Decimal = Field(gt=0, lt=10**8)
+
+    @field_validator("transaction_datetime")
+    @classmethod
+    def _plausible_time(cls, value: datetime) -> datetime:
+        # Rejects absurd years that would overflow date arithmetic downstream.
+        moment = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if not datetime(2000, 1, 1, tzinfo=timezone.utc) <= moment <= datetime.now(timezone.utc) + timedelta(days=1):
+            raise ValueError("transaction_datetime is outside the plausible range")
+        return value
+
+class IngestBatch(BaseModel):
+    transactions: list[Any] = Field(max_length=500)
+
+class IngestRejection(BaseModel):
+    transaction_id: int | None
+    reason: str
+
+class IngestResult(BaseModel):
+    stored: int
+    dropped_withdrawals: int
+    rejected: list[IngestRejection]
+
+class IngestCursor(BaseModel):
+    cursor: int

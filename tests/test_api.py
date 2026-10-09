@@ -1,4 +1,3 @@
-import sqlite3
 from datetime import date, datetime
 
 import pytest
@@ -10,8 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app import models
 from app.database import get_db
 from app.main import app
-from app.scripts.ingest import fetch_messages, ingest_rows
-from app.scripts.poller import poll_once
+from conftest import WRITE_TOKEN, bearer
 from app.services.transaction_services import (
     MANUAL_ID_FLOOR,
     build_datetime_range,
@@ -36,7 +34,7 @@ def client(Session):
             db.close()
 
     app.dependency_overrides[get_db] = override
-    yield TestClient(app)  # no `with`: skip lifespan, which targets Postgres
+    yield TestClient(app, headers=bearer(WRITE_TOKEN))  # no `with`: skip lifespan, which targets Postgres
     app.dependency_overrides.clear()
 
 
@@ -102,45 +100,6 @@ def test_manual_ids_do_not_move_the_ingest_cursor(Session):
     assert get_ingest_cursor(db) == 500
 
 
-@pytest.fixture()
-def chat_db():
-    conn = sqlite3.connect(":memory:")
-    conn.executescript("""
-        CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
-        CREATE TABLE message (ROWID INTEGER PRIMARY KEY, handle_id INTEGER, date INTEGER, attributedBody BLOB);
-        INSERT INTO handle VALUES (1, '72272'), (2, '555');
-    """)
-    return conn
-
-
-def add_message(conn, rowid, text, handle=1):
-    conn.execute("INSERT INTO message VALUES (?, ?, ?, ?)", (rowid, handle, 7.7e17 + rowid * 1e9, text.encode()))
-
-
-def test_poller_ingests_filters_and_is_idempotent(Session, chat_db):
-    add_message(chat_db, 10, "RBC: Purchase of $1,500.00 CAD made 07/04 at Shop. STOP-TXT STOP/HELP-TXT HELP")
-    add_message(chat_db, 11, "RBC: Credit card ************1234 is due 07/20. Min pymt: $25.00 CAD. STOP-TXT STOP/HELP-TXT HELP.")
-    add_message(chat_db, 12, "RBC: Purchase of $9.00 CAD made 07/04 at Other. STOP-TXT STOP/HELP-TXT HELP", handle=2)
-    db = Session()
-
-    cursor = poll_once(db, chat_db, 0)
-    assert cursor == 11  # advanced past the skipped due-notice
-    assert [t.transaction_id for t in db.query(models.Transaction).all()] == [10]
-    assert float(db.get(models.Transaction, 10).amount) == 1500.00
-
-    assert poll_once(db, chat_db, cursor) == cursor  # nothing new, no re-reads
-
-    rows = fetch_messages(chat_db, "72272")
-    assert ingest_rows(db, rows) == 0  # re-running a backfill adds nothing
-
-
-def test_poller_cursor_survives_empty_database(Session, chat_db):
-    add_message(chat_db, 5, "Deposit of $20.00 to RBC Acct TESTER made 07/04. STOP-TXT STOP/HELP-TXT HELP")
-    db = Session()
-    assert get_ingest_cursor(db) == 0
-    assert poll_once(db, chat_db, get_ingest_cursor(db)) == 5
-
-
 def test_explicit_id_must_fit_int4(client):
     assert client.post("/transactions", json=tx(3_000_000_000)).status_code == 422
     assert client.post("/transactions", json=tx(0)).status_code == 422
@@ -184,27 +143,6 @@ def test_pagination_is_stable_with_identical_timestamps(client):
     for offset in (0, 2, 4):
         seen += [t["transaction_id"] for t in client.get("/transactions/", params={"offset": offset, "limit": 2}).json()]
     assert sorted(seen) == [1, 2, 3, 4, 5]
-
-
-def test_poison_message_is_skipped_and_does_not_block_later_ones(Session, chat_db):
-    add_message(chat_db, 1, "RBC: Purchase of $1.2.3 CAD made 07/04 at Bad. STOP-TXT STOP/HELP-TXT HELP")
-    add_message(chat_db, 2, "RBC: Purchase of $4.00 CAD made 07/04 at Good. STOP-TXT STOP/HELP-TXT HELP")
-    db = Session()
-    cursor = poll_once(db, chat_db, 0)
-    assert cursor == 2
-    assert [t.transaction_id for t in db.query(models.Transaction).all()] == [2]
-
-
-def test_database_outage_propagates_so_the_cursor_does_not_advance(chat_db):
-    from sqlalchemy.exc import OperationalError
-
-    class DownDb:
-        def get(self, *a, **k):
-            raise OperationalError("connect", {}, Exception("db down"))
-
-    add_message(chat_db, 1, "Deposit of $20.00 to RBC Acct TESTER made 07/04. STOP-TXT STOP/HELP-TXT HELP")
-    with pytest.raises(OperationalError):
-        poll_once(DownDb(), chat_db, 0)
 
 
 def test_withdrawal_matching_a_card_payment_is_dropped(Session):

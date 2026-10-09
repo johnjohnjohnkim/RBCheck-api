@@ -4,11 +4,12 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from .. import schemas
+from ..auth import require_read
 from ..database import get_db
 from ..services import clock
 from ..services.insights import history, store_digest
 
-router = APIRouter(prefix="/insights", tags=["insights"])
+router = APIRouter(prefix="/insights", tags=["insights"], dependencies=[Depends(require_read)])
 
 
 @router.get("/today", response_model=schemas.Digest)

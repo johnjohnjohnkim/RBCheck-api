@@ -18,8 +18,15 @@ from decimal import Decimal
 # The app reads database settings at import. Set placeholders unconditionally:
 # real environment variables beat .env files, so this also overrides any real
 # settings in the shell or in .env, and the demo can never reach a real database.
+#
+# The tokens are public, fixed demo values (they protect nothing real): paste
+# DEMO_READ_TOKEN into the client's unlock screen.
+DEMO_READ_TOKEN = "demo-read-token-for-local-use-only"
+DEMO_WRITE_TOKEN = "demo-write-token-for-local-use-only"
 for key, value in {"DATABASE_HOSTNAME": "unused", "DATABASE_PORT": "5432", "DATABASE_USERNAME": "unused",
-                   "DATABASE_PASSWORD": "unused", "DATABASE_NAME": "unused", "IP_ADDRESS": ""}.items():
+                   "DATABASE_PASSWORD": "unused", "DATABASE_NAME": "unused", "IP_ADDRESS": "",
+                   "READ_TOKEN": DEMO_READ_TOKEN, "WRITE_TOKEN": DEMO_WRITE_TOKEN,
+                   "CORS_ORIGINS": "http://127.0.0.1:3000,http://localhost:3000"}.items():
     os.environ[key] = value
 
 import uvicorn
@@ -92,6 +99,7 @@ def main() -> None:
     database.SessionLocal = Session   # scripts that open sessions directly get the demo database too
     app.dependency_overrides[get_db] = demo_db
     print("DEMO DATA ONLY: all figures are made up. http://127.0.0.1:8000")
+    print(f"Read token for the client: {DEMO_READ_TOKEN}")
     app.router.lifespan_context = no_lifespan   # skip create_all on the (unused) Postgres engine
     uvicorn.run(app, host="127.0.0.1", port=8000)
 

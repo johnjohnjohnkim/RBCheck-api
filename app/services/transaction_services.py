@@ -65,17 +65,27 @@ def insert_transaction(db: Session, transaction: schemas.TransactionCreate) -> m
         return row
 
 
-def filter_cc_payment_duplicates(transactions, db=None):
+def filter_cc_payment_duplicates(transactions, db=None, paired_payment_ids: set | None = None):
     """
-    Remove Withdrawal entries that have a matching Credit Card Payment
-    of the same amount within 60 seconds. Checks within the batch first,
+    Remove Withdrawal entries that are the settlement side of a Credit Card
+    Payment of the same amount within 60 seconds. Checks within the batch first,
     then the DB (handles pairs that span two poll cycles).
+
+    Pairing is one-to-one: each payment accounts for at most one withdrawal, so
+    two real withdrawals of the same amount next to one payment keep one of them.
+    The ids of payments that already absorbed a withdrawal from this batch are
+    added to `paired_payment_ids` (if given) so the caller doesn't let them
+    absorb a stored one as well.
+    (A payment already stored by an earlier call cannot tell us whether it has
+    already absorbed a withdrawal, so a lone later duplicate can still be dropped.)
     """
     cc_payments = [
-        (Decimal(str(t['amount'])), _parse_dt(t['transaction_datetime']))
+        # amount, time, used, id
+        [Decimal(str(t['amount'])), _parse_dt(t['transaction_datetime']), False, t.get('transaction_id')]
         for t in transactions
         if t['transaction_type'] == 'Credit Card Payment' and t['amount'] is not None
     ]
+    used_stored: set[int] = set()
 
     filtered = []
     for t in transactions:
@@ -83,23 +93,24 @@ def filter_cc_payment_duplicates(transactions, db=None):
             amount = Decimal(str(t['amount']))
             dt = _parse_dt(t['transaction_datetime'])
 
-            in_batch = any(
-                amount == cc_amt and abs((dt - cc_dt).total_seconds()) <= 60
-                for cc_amt, cc_dt in cc_payments
-            )
+            match = next((p for p in cc_payments
+                          if not p[2] and p[0] == amount and abs((dt - p[1]).total_seconds()) <= 60), None)
+            if match:
+                match[2] = True
+                if paired_payment_ids is not None:
+                    paired_payment_ids.add(match[3])
+                continue
 
-            in_db = False
-            if db and not in_batch:
-                lower = dt - timedelta(seconds=60)
-                upper = dt + timedelta(seconds=60)
-                in_db = db.query(models.Transaction).filter(
+            if db:
+                stored = db.query(models.Transaction).filter(
                     models.Transaction.transaction_type == 'Credit Card Payment',
                     models.Transaction.amount == amount,
-                    models.Transaction.transaction_datetime.between(lower, upper),
-                ).first() is not None
-
-            if in_batch or in_db:
-                continue
+                    models.Transaction.transaction_datetime.between(dt - timedelta(seconds=60), dt + timedelta(seconds=60)),
+                ).order_by(models.Transaction.transaction_id).all()
+                payment = next((p for p in stored if p.transaction_id not in used_stored), None)
+                if payment:
+                    used_stored.add(payment.transaction_id)
+                    continue
 
         filtered.append(t)
     return filtered
