@@ -1,0 +1,13 @@
+# The Dockerfile only copies requirements.txt and app/, so this just keeps
+# the build context small and secrets off the Docker daemon.
+.env
+.env.*
+!.env.example
+.git
+venv/
+**/__pycache__/
+.pytest_cache/
+*.db
+output.txt
+graphify-out/
+backups/
