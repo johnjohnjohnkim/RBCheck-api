@@ -1,6 +1,6 @@
 from passlib.context import CryptContext
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated = "auto") #telling bcrypt what the default hashing algorithm is
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash(password: str):

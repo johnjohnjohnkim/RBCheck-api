@@ -8,4 +8,4 @@ output.txt
 # C++ CMake build output (generated, not source)
 cpp_server/build/
 
-*.md
+CLAUDE.md

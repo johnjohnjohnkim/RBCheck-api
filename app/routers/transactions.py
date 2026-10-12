@@ -40,7 +40,7 @@ def get_all_transactions(offset: int, limit: int, db: Session = Depends(get_db))
     return db.query(models.Transaction).order_by(models.Transaction.transaction_datetime.desc()).offset(offset).limit(limit).all()
 
 
-@router.get("/date", status_code=status.HTTP_200_OK, response_model = List[schemas.Transaction])
+@router.get("/date", status_code=status.HTTP_200_OK, response_model=List[schemas.Transaction])
 def send_date_transactions(date_str: str = "", db: Session = Depends(get_db)):
 
     # Defaults to current date if no date is provided
@@ -55,7 +55,7 @@ def send_date_transactions(date_str: str = "", db: Session = Depends(get_db)):
     return results
 
 
-@router.post("", status_code = status.HTTP_201_CREATED, response_model=schemas.Transaction)
+@router.post("", status_code=status.HTTP_201_CREATED, response_model=schemas.Transaction)
 def send_transaction(transactions: schemas.Transaction, db: Session = Depends(get_db)):
     new_transaction = models.Transaction(**transactions.model_dump())
 
@@ -129,7 +129,7 @@ def transactions_by_date_range(start_date: str, end_date: str = None, db: Sessio
     
     return results
 
-@router.get("/merchant", response_model = List[schemas.Transaction])
+@router.get("/merchant", response_model=List[schemas.Transaction])
 def transactions_at_merchant(merchant: str, db: Session = Depends(get_db)):
     results = db.query(models.Transaction).filter(models.Transaction.place.ilike(f'%{merchant}%')).all()
 
@@ -143,7 +143,7 @@ def transaction_amount_range(range_start: Decimal, range_end: Decimal, db: Sessi
     
     return results
 
-@router.get("/{id}", status_code = status.HTTP_200_OK, response_model=schemas.Transaction)
+@router.get("/{id}", status_code=status.HTTP_200_OK, response_model=schemas.Transaction)
 def get_one_transaction(id: int, db: Session = Depends(get_db)):
     transaction = db.query(models.Transaction).filter(models.Transaction.transaction_id == id).first()
     if not transaction:

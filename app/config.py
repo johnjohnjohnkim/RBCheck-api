@@ -6,10 +6,9 @@ class Env(BaseSettings):
     DATABASE_USERNAME: str
     DATABASE_PASSWORD: str
     DATABASE_NAME: str
-    IP_ADDRESS: str
     SECRET_KEY: str
     ALGORITHM: str
-    ACCESS_TOKEN_EXPIRE_MINUTES: str # might not need this
+    ACCESS_TOKEN_EXPIRE_MINUTES: int
 
     class Config:
         env_file = ".env"

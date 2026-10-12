@@ -29,18 +29,22 @@ RBCheck/
 │   ├── main.py                       FastAPI app, CORS config, router registration
 │   ├── config.py                     Env settings (pydantic-settings, reads .env)
 │   ├── database.py                   Postgres engine/session + SQLite chat.db connection
-│   ├── models.py                     SQLAlchemy Transaction model
-│   ├── schemas.py                    Pydantic schemas (Transaction, UpdateTransaction, SpendingDisplay, Date)
+│   ├── models.py                     SQLAlchemy Transaction and Users models
+│   ├── schemas.py                    Pydantic schemas (Transaction, UpdateTransaction, SpendingDisplay, user/auth schemas)
+│   ├── oauth2.py                     JWT creation/verification, get_current_user dependency
+│   ├── utils.py                      Password hashing (passlib/bcrypt)
 │   ├── sms_parser.py                 Extracts transaction text + amount/merchant/type from iMessage bodies
 │   ├── routers/
-│   │   └── transactions.py           /transactions REST endpoints
+│   │   ├── transactions.py           /transactions REST endpoints
+│   │   ├── users.py                  /users signup endpoint
+│   │   └── auth.py                   /login endpoint
 │   ├── services/
 │   │   └── transaction_services.py   Date-range helper + CC-payment/withdrawal de-duplication
 │   └── scripts/
 │       ├── backfill.py               One-time import of all historical RBC texts into Postgres
-│       └── poller.py                 Polls chat.db every 5s and pushes new transactions
-├── copy_chat_db.py                   Dev utility: copies handle/message tables out of chat.db for testing off macOS
-├── rbcheck.dockerfile                Container build for the API
+│       ├── poller.py                 Polls chat.db every 5s and pushes new transactions
+│       └── copy_chat_db.py           Dev utility: copies handle/message tables out of chat.db for testing off macOS
+├── Dockerfile                        Container build for the API
 └── requirements.txt
 ```
 
@@ -65,14 +69,16 @@ Fill in `app/.env`:
 
 | Variable | Description |
 |---|---|
-| `DATABASE_HOSTNAME` | Not currently read (see note below) |
+| `DATABASE_HOSTNAME` | Postgres host |
 | `DATABASE_PORT` | Postgres port |
 | `DATABASE_USERNAME` | Postgres role |
 | `DATABASE_PASSWORD` | Postgres password |
 | `DATABASE_NAME` | Database name |
-| `IP_ADDRESS` | Postgres host — the connection string in `app/database.py` uses this, not `DATABASE_HOSTNAME` |
+| `SECRET_KEY` | Signing key for JWTs |
+| `ALGORITHM` | JWT signing algorithm, e.g. `HS256` |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT expiry, in minutes |
 
-> **Note:** `app/.env.example` also lists `DATABASE_POOL_SIZE`, `LISTEN_HOST`, `LISTEN_PORT`, `RBC_HANDLE_ID`, and `RBC_CHATDB_PATH`, but none of these are read by `app/config.py` or referenced elsewhere in the code. The iMessage handle ROWID for the RBC sender and the `chat.db` path are currently hardcoded in `app/scripts/backfill.py` and `app/scripts/poller.py` rather than configurable via environment variables.
+> **Note:** the iMessage handle ROWID for the RBC sender and the `chat.db` path are currently hardcoded in `app/scripts/backfill.py` and `app/scripts/poller.py` rather than configurable via environment variables.
 
 ## Running
 
@@ -91,20 +97,18 @@ python -m app.scripts.poller     # long-running, polls every 5 seconds
 
 ### Dev utility: `copy_chat_db.py`
 
-`app/database.py` connects to `~/Library/Messages/chat.db` on every platform except Windows, where it falls back to a local `transactions.db` file (since there's no real iMessage database to read). To populate `transactions.db` for local testing, run `copy_chat_db.py` on a Mac that has the real `chat.db`, then copy the resulting `transactions.db` file into the `RBCheck/` root on Windows.
+`app/database.py` connects to `~/Library/Messages/chat.db` on every platform except Windows, where it falls back to a local `transactions.db` file (since there's no real iMessage database to read). To populate `transactions.db` for local testing, run `python -m app.scripts.copy_chat_db` on a Mac that has the real `chat.db`, then copy the resulting `transactions.db` file into the repository root on Windows.
 
 ### Docker
 
 ```bash
-docker build -f rbcheck.dockerfile -t rbcheck .
+docker build -t rbcheck .
 docker run --env-file app/.env -p 8000:8000 rbcheck
 ```
 
-> **Note:** `rbcheck.dockerfile` runs `uvicorn main:app`, but the FastAPI app lives at `app/main.py` (i.e. `app.main:app`), not a root-level `main.py`. As written, the container command will fail to find the app.
-
 ## API
 
-All endpoints are under `/transactions` (see `app/routers/transactions.py` for full details):
+Transaction endpoints are under `/transactions` (see `app/routers/transactions.py` for full details):
 
 | Method | Path | Description |
 |---|---|---|
@@ -120,6 +124,15 @@ All endpoints are under `/transactions` (see `app/routers/transactions.py` for f
 | GET | `/transactions/{id}` | Single transaction |
 | POST | `/transactions` | Create a transaction |
 | PATCH | `/transactions/{id}` | Partially update a transaction |
+
+Auth endpoints:
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/users` | Create a user (signup) |
+| POST | `/login` | Exchange email/password for a JWT (`OAuth2PasswordRequestForm`: `username` = email) |
+
+Pass the returned token as `Authorization: Bearer <token>` — note that no route currently depends on `oauth2.get_current_user`, so authentication isn't enforced on any endpoint yet.
 
 CORS is restricted to `gwanwoo.dev`, its subdomains, and `localhost`/`127.0.0.1` (see `app/main.py`).
 

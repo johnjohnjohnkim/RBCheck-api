@@ -7,7 +7,7 @@ import sqlite3
 import os
 
 src_path = os.path.expanduser("~/Library/Messages/chat.db")
-dst_path = os.path.join(os.path.dirname(__file__), "transactions.db")
+dst_path = os.path.join(os.path.dirname(__file__), "..", "..", "transactions.db")
 
 src = sqlite3.connect(src_path)
 dst = sqlite3.connect(dst_path)
