@@ -2,113 +2,156 @@
 
 A FastAPI backend that turns RBC (Royal Bank of Canada) SMS transaction alerts into a structured, queryable spending ledger.
 
-RBC sends a text for every purchase, withdrawal, deposit, and credit card payment. On macOS those texts land in the iMessage database (`chat.db`). RBCheck reads that SQLite database, parses each message's embedded text for the amount/merchant/transaction type, and writes the result into a Postgres table that a REST API exposes to the [RBCheck-client](../RBCheck-client) frontend.
+RBC sends a text for every purchase, withdrawal, deposit, and credit card payment. On macOS those texts land in the iMessage database (`chat.db`). A small agent on an always-on Mac forwards new RBC texts to the API, which parses each one for the amount/merchant/transaction type and stores it in Postgres for the [RBCheck-client](../RBCheck-client) frontend.
 
 ## How it works
 
-1. **Ingestion** (`app/scripts/poller.py` or `app/scripts/backfill.py`) reads new rows from the `message`/`handle` tables in `chat.db` for the RBC SMS sender.
+```
+ Mac (always on)                        Server (Docker Compose)
+ ┌────────────────────────┐   HTTPS    ┌──────────────────────────────────────────┐
+ │ agent/ingest_agent.py  │──────────▶ │ Caddy (HTTPS) ─▶ api (FastAPI) ─▶ db     │
+ │ reads chat.db (ro)     │ ingest key │                  parse · dedup · store   │
+ └────────────────────────┘            └──────────────────────────────────────────┘
+ Browser (RBCheck-client) ── HTTPS + login token ──▶ Caddy ─▶ api
+```
+
+1. **Forwarding** (`agent/ingest_agent.py`) reads RBC texts newer than the last one it sent from `chat.db` and posts them, raw, to `POST /ingest`. It asks the API where to resume when it starts, so restarts and outages lose nothing.
 2. **Parsing** (`app/sms_parser.py`) extracts the readable text from each message's `attributedBody` blob, then regexes out the dollar amount, merchant name, and transaction type (`Deposit`, `Withdrawal`, `CC Purchase`, `Credit Card Payment`, `Credit Refund`, or a balance-warning marker).
-3. **Deduplication** (`app/services/transaction_services.py`) drops `Withdrawal` rows that are really the settlement side of a `Credit Card Payment` seen within 60 seconds, checking both the current batch and existing Postgres rows.
-4. **Storage** — each parsed transaction is inserted into Postgres via the `POST /transactions` endpoint, using a single SQLAlchemy `Transaction` model (`app/models.py`).
-5. **API** (`app/routers/transactions.py`) serves summaries and filtered transaction lists to the client.
+3. **Deduplication** (`app/services/transaction_services.py`) drops a `Withdrawal` that is really the settlement side of a `Credit Card Payment` for the same amount within 60 seconds, whichever of the two arrives first.
+4. **Storage**: rows are inserted with the `chat.db` ROWID as `transaction_id`; ones already stored are skipped, so resending is harmless. Transactions entered by hand get negative ids.
+5. **API** (`app/routers/transactions.py`) serves summaries and filtered transaction lists to the logged-in client. "Today", "this week" and "this month" follow `TIMEZONE`, not the server's clock.
 
 ## Tech stack
 
-- **FastAPI** + **Uvicorn** — HTTP API and ASGI server
-- **SQLAlchemy** + **psycopg** — Postgres ORM/driver for the transactions table
-- **Pydantic / pydantic-settings** — request/response schemas and env-based config
-- **sqlite3** (stdlib) — read-only access to the iMessage `chat.db`
+- **FastAPI** + **Uvicorn**: HTTP API and ASGI server
+- **SQLAlchemy** + **psycopg**: Postgres ORM/driver
+- **Pydantic / pydantic-settings**: request/response schemas and env-based config
+- **Docker Compose** + **Caddy**: deployment and automatic HTTPS
+- **Python standard library only** for the Mac agent
 
 See `requirements.txt` for exact pinned versions.
 
 ## Project structure
 
 ```
-RBCheck/
+RBCheck-api/
 ├── app/
-│   ├── main.py                       FastAPI app, CORS config, router registration
+│   ├── main.py                       FastAPI app, CORS, routers, /health
 │   ├── config.py                     Env settings (pydantic-settings, reads .env)
-│   ├── database.py                   Postgres engine/session + SQLite chat.db connection
+│   ├── database.py                   Postgres engine/session
 │   ├── models.py                     SQLAlchemy Transaction and Users models
-│   ├── schemas.py                    Pydantic schemas (Transaction, UpdateTransaction, SpendingDisplay, user/auth schemas)
+│   ├── schemas.py                    Pydantic request/response schemas
 │   ├── oauth2.py                     JWT creation/verification, get_current_user dependency
 │   ├── utils.py                      Password hashing (passlib/bcrypt)
-│   ├── sms_parser.py                 Extracts transaction text + amount/merchant/type from iMessage bodies
+│   ├── sms_parser.py                 Extracts amount/merchant/type from iMessage bodies
 │   ├── routers/
-│   │   ├── transactions.py           /transactions REST endpoints
-│   │   ├── users.py                  /users signup endpoint
-│   │   └── auth.py                   /login endpoint
+│   │   ├── transactions.py           /transactions endpoints (login required)
+│   │   ├── auth.py                   /login
+│   │   └── ingest.py                 /ingest endpoints for the Mac agent (ingest key required)
 │   ├── services/
-│   │   └── transaction_services.py   Date-range helper + CC-payment/withdrawal de-duplication
+│   │   └── transaction_services.py   Local-day ranges, parsing, de-duplication, ingest
 │   └── scripts/
-│       ├── backfill.py               One-time import of all historical RBC texts into Postgres
-│       ├── poller.py                 Polls chat.db every 5s and pushes new transactions
-│       └── copy_chat_db.py           Dev utility: copies handle/message tables out of chat.db for testing off macOS
-├── Dockerfile                        Container build for the API
-└── requirements.txt
+│       └── create_user.py            Creates the login, or resets its password
+├── agent/
+│   ├── ingest_agent.py               Runs on the Mac; forwards RBC texts to /ingest
+│   └── install.sh                    Installs it as a launchd job
+├── deploy/
+│   ├── Caddyfile                     HTTPS reverse proxy config
+│   ├── backup.sh                     Nightly pg_dump, keeps two weeks
+│   └── restore.sh                    Loads a dump into the database
+├── tests/                            pytest suite (needs a Postgres to run against)
+├── docker-compose.yml                db + api + caddy
+├── Dockerfile
+├── requirements.txt
+└── requirements-dev.txt
 ```
 
-## Prerequisites
+## Configuration
 
-- Python 3.11+ (the Docker image uses `python:3.11-slim`)
-- A running Postgres instance
-- macOS with iMessage forwarding set up for the RBC SMS shortcode (for live ingestion) — on other platforms, a copy of `chat.db`'s `handle`/`message` tables (see [Dev utility: `copy_chat_db.py`](#dev-utility-copy_chat_dbpy))
-
-## Setup
-
-```bash
-python -m venv venv
-venv\Scripts\activate        # Windows
-# source venv/bin/activate   # macOS/Linux
-
-pip install -r requirements.txt
-cp app/.env.example app/.env
-```
-
-Fill in `app/.env`:
+Copy `.env.example` to `.env` and fill it in; the comments in it say how to generate each secret.
 
 | Variable | Description |
 |---|---|
-| `DATABASE_HOSTNAME` | Postgres host |
-| `DATABASE_PORT` | Postgres port |
-| `DATABASE_USERNAME` | Postgres role |
-| `DATABASE_PASSWORD` | Postgres password |
-| `DATABASE_NAME` | Database name |
-| `SECRET_KEY` | Signing key for JWTs |
-| `ALGORITHM` | JWT signing algorithm, e.g. `HS256` |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT expiry, in minutes |
+| `DATABASE_HOSTNAME` / `_PORT` / `_USERNAME` / `_PASSWORD` / `_NAME` | Postgres connection. Under Compose the host is always `db`. |
+| `SECRET_KEY` | Signs login tokens |
+| `ALGORITHM` | JWT signing algorithm, `HS256` |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | How long a login lasts |
+| `INGEST_API_KEY` | Shared secret the Mac agent sends as `X-Ingest-Key` |
+| `TIMEZONE` | Zone for day boundaries and returned times (default `America/Toronto`) |
+| `API_DOMAIN` | Domain Caddy gets a certificate for (Compose only) |
 
-> **Note:** the iMessage handle ROWID for the RBC sender and the `chat.db` path are currently hardcoded in `app/scripts/backfill.py` and `app/scripts/poller.py` rather than configurable via environment variables.
-
-## Running
-
-Start the API:
+## Running locally
 
 ```bash
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements-dev.txt
+cp .env.example .env              # point DATABASE_* at a local Postgres
 uvicorn app.main:app --reload
+python -m app.scripts.create_user you@example.com
 ```
 
-Run ingestion (requires the API/Postgres to be reachable, since both scripts call the `send_transaction` handler directly):
+## Tests
 
 ```bash
-python -m app.scripts.backfill   # one-time import of full chat.db history
-python -m app.scripts.poller     # long-running, polls every 5 seconds
+pytest
 ```
 
-### Dev utility: `copy_chat_db.py`
+The tests need a Postgres server. By default they use (and create) `rbcheck_test` on `localhost` as your OS user; override with `TEST_DATABASE_HOSTNAME`, `_PORT`, `_USERNAME`, `_PASSWORD` and `_NAME`. They empty every table before each test, so the name must end in `_test`.
 
-`app/database.py` connects to `~/Library/Messages/chat.db` on every platform except Windows, where it falls back to a local `transactions.db` file (since there's no real iMessage database to read). To populate `transactions.db` for local testing, run `python -m app.scripts.copy_chat_db` on a Mac that has the real `chat.db`, then copy the resulting `transactions.db` file into the repository root on Windows.
+## Deploying to AWS Lightsail
 
-### Docker
+A 1 GB Lightsail instance is enough for Postgres, the API and Caddy.
+
+**1. Create the server**
+- Lightsail → Create instance → Linux, **Ubuntu 24.04 LTS**, the 1 GB plan.
+- Networking tab: create a **static IP** and attach it. In the IPv4 firewall, add **HTTPS (443)**; keep SSH (22) and HTTP (80, needed for the certificate).
+- In your DNS, add an **A record** for `api.gwanwoo.dev` pointing at the static IP.
+
+**2. Install Docker and start the stack** (over SSH)
 
 ```bash
-docker build -t rbcheck .
-docker run --env-file app/.env -p 8000:8000 rbcheck
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER && exit        # log back in afterwards
+git clone git@github.com:johnjohnjohnkim/RBCheck-api.git && cd RBCheck-api   # private repo: add the server's key as a GitHub deploy key first
+cp .env.example .env && chmod 600 .env && nano .env   # fill in every secret
+docker compose up -d --build
+curl https://api.gwanwoo.dev/health          # {"status":"ok"} once the certificate is issued
 ```
+
+**3. Move the existing data over**
+
+On the Mac that has the current database:
+
+```bash
+pg_dump --format=custom -d <current db name> -f rbcheck.dump
+scp rbcheck.dump ubuntu@<static ip>:~/RBCheck-api/
+```
+
+On the server:
+
+```bash
+deploy/restore.sh rbcheck.dump
+docker compose exec api python -m app.scripts.create_user you@example.com
+```
+
+Check a few recent transactions show the same times as before.
+
+**4. Backups**
+- Lightsail → the instance → Snapshots → enable **automatic snapshots**.
+- `crontab -e` and add: `15 3 * * * $HOME/RBCheck-api/deploy/backup.sh >> $HOME/rbcheck-backup.log 2>&1`
+
+**5. Switch the Mac over**
+- Stop the old `uvicorn` and `poller.py` on the Mac.
+- From this repo on the Mac: `agent/install.sh https://api.gwanwoo.dev` and paste `INGEST_API_KEY` when asked.
+- Give Full Disk Access to the python path it prints, then follow the log: `tail -f ~/Library/Logs/rbcheck-agent.log`. It should report `Starting after ROWID …` and send anything newer.
+- Keep the Mac awake: System Settings → Battery/Energy → "Prevent automatic sleeping when the display is off".
+
+**Updating**: `git pull && docker compose up -d --build` on the server. To update the agent, re-run `agent/install.sh` on the Mac.
 
 ## API
 
-Transaction endpoints are under `/transactions` (see `app/routers/transactions.py` for full details):
+Transaction endpoints need `Authorization: Bearer <token>` from `/login`:
 
 | Method | Path | Description |
 |---|---|---|
@@ -118,24 +161,22 @@ Transaction endpoints are under `/transactions` (see `app/routers/transactions.p
 | GET | `/transactions/weekly` | Transactions since Monday |
 | GET | `/transactions/past_7_days` | Rolling 7-day window |
 | GET | `/transactions/month` | Transactions since the 1st of the month |
-| GET | `/transactions/date_range?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` | Transactions in an arbitrary range |
+| GET | `/transactions/date_range?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` | Transactions in a range, either order (end defaults to today) |
 | GET | `/transactions/merchant?merchant=` | Case-insensitive merchant search |
 | GET | `/transactions/price_range?range_start=&range_end=` | Transactions within an amount range |
 | GET | `/transactions/{id}` | Single transaction |
-| POST | `/transactions` | Create a transaction |
+| POST | `/transactions` | Add a transaction by hand (the server picks the id) |
 | PATCH | `/transactions/{id}` | Partially update a transaction |
 
-Auth endpoints:
+Other endpoints:
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/users` | Create a user (signup) |
-| POST | `/login` | Exchange email/password for a JWT (`OAuth2PasswordRequestForm`: `username` = email) |
+| POST | `/login` | Exchange email/password for a token (`OAuth2PasswordRequestForm`: `username` = email) |
+| GET | `/ingest/cursor` | Highest stored `chat.db` ROWID (needs `X-Ingest-Key`) |
+| POST | `/ingest` | Store a batch of raw texts (needs `X-Ingest-Key`) |
+| GET | `/health` | API and database are up |
 
-Pass the returned token as `Authorization: Bearer <token>` — note that no route currently depends on `oauth2.get_current_user`, so authentication isn't enforced on any endpoint yet.
+There is no sign-up endpoint; create the login with `app/scripts/create_user.py`.
 
 CORS is restricted to `gwanwoo.dev`, its subdomains, and `localhost`/`127.0.0.1` (see `app/main.py`).
-
-## Tests
-
-No test suite is currently present in this repository.
