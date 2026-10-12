@@ -1,7 +1,18 @@
-from sqlalchemy.orm import Session
-from datetime import datetime, time, timedelta
+import base64
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
-from .. import models
+
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
+
+from .. import models, schemas
+from ..sms_parser import parseTransaction, transactionAnalysis
+
+# A Credit Card Payment also produces a Withdrawal text for the same amount
+# within this window. Only the payment is kept.
+DEDUP_WINDOW = timedelta(seconds=60)
+
 
 def build_datetime_range(start_date, end_date=None):
 
@@ -13,20 +24,30 @@ def build_datetime_range(start_date, end_date=None):
     return day_max, day_min
 
 
-def _parse_dt(dt):
-    if isinstance(dt, str):
-        return datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
-    return dt
+def parse_message(message: schemas.IngestMessage) -> dict:
+    """Turns one raw RBC text into a transactions row."""
+    body = base64.b64decode(message.body_b64) if message.body_b64 is not None else None
+
+    # The parser was written against str() of the raw blob, so keep feeding it that.
+    amount, place, transaction_type = transactionAnalysis(parseTransaction(str(body).upper()))
+
+    return {
+        "transaction_id": message.rowid,
+        "transaction_datetime": datetime.fromtimestamp(message.sent_at, timezone.utc),
+        "amount": Decimal(amount.replace(",", "")) if amount else None,
+        "place": place,
+        "transaction_type": transaction_type,
+    }
 
 
-def filter_cc_payment_duplicates(transactions, db=None):
+def filter_cc_payment_duplicates(transactions, db: Session):
     """
     Remove Withdrawal entries that have a matching Credit Card Payment
-    of the same amount within 60 seconds. Checks within the batch first,
-    then the DB (handles pairs that span two poll cycles).
+    of the same amount within the dedup window. Checks within the batch
+    first, then the DB (handles pairs that span two batches).
     """
     cc_payments = [
-        (Decimal(str(t['amount'])), _parse_dt(t['transaction_datetime']))
+        (t['amount'], t['transaction_datetime'])
         for t in transactions
         if t['transaction_type'] == 'Credit Card Payment' and t['amount'] is not None
     ]
@@ -34,26 +55,46 @@ def filter_cc_payment_duplicates(transactions, db=None):
     filtered = []
     for t in transactions:
         if t['transaction_type'] == 'Withdrawal' and t['amount'] is not None:
-            amount = Decimal(str(t['amount']))
-            dt = _parse_dt(t['transaction_datetime'])
+            amount, dt = t['amount'], t['transaction_datetime']
 
             in_batch = any(
-                amount == cc_amt and abs((dt - cc_dt).total_seconds()) <= 60
+                amount == cc_amt and abs(dt - cc_dt) <= DEDUP_WINDOW
                 for cc_amt, cc_dt in cc_payments
             )
 
-            in_db = False
-            if db and not in_batch:
-                lower = dt - timedelta(seconds=60)
-                upper = dt + timedelta(seconds=60)
-                in_db = db.query(models.Transaction).filter(
-                    models.Transaction.transaction_type == 'Credit Card Payment',
-                    models.Transaction.amount == amount,
-                    models.Transaction.transaction_datetime.between(lower, upper),
-                ).first() is not None
+            in_db = not in_batch and db.query(models.Transaction).filter(
+                models.Transaction.transaction_type == 'Credit Card Payment',
+                models.Transaction.amount == amount,
+                models.Transaction.transaction_datetime.between(dt - DEDUP_WINDOW, dt + DEDUP_WINDOW),
+            ).first() is not None
 
             if in_batch or in_db:
                 continue
 
         filtered.append(t)
     return filtered
+
+
+def ingest_messages(db: Session, messages: list[schemas.IngestMessage]) -> int:
+    """
+    Parses, de-duplicates and stores a batch of texts. Safe to call again
+    with texts already stored: those are skipped. Returns how many rows
+    were inserted.
+    """
+    rows = filter_cc_payment_duplicates([parse_message(m) for m in messages], db)
+    if not rows:
+        return 0
+
+    inserted = db.execute(
+        insert(models.Transaction)
+        .values(rows)
+        .on_conflict_do_nothing(index_elements=["transaction_id"])
+        .returning(models.Transaction.transaction_id)
+    ).all()
+    db.commit()
+    return len(inserted)
+
+
+def last_ingested_rowid(db: Session) -> int:
+    """The highest chat.db ROWID stored so far, or 0 when there is none."""
+    return max(db.query(func.max(models.Transaction.transaction_id)).scalar() or 0, 0)

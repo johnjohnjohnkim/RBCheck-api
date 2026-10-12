@@ -9,3 +9,4 @@ output.txt
 cpp_server/build/
 
 CLAUDE.md
+.pytest_cache/
