@@ -1,0 +1,5 @@
+# Gets and renews an HTTPS certificate for API_DOMAIN, then forwards to the API.
+{$API_DOMAIN} {
+	encode gzip
+	reverse_proxy api:8000
+}
