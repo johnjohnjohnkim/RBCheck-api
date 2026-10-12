@@ -11,21 +11,20 @@ def _assume_local_time(dt: datetime) -> datetime:
 
 LocalDatetime = Annotated[datetime, AfterValidator(_assume_local_time)]
 
-class Transaction(BaseModel):
-    transaction_id: int
+class NewTransaction(BaseModel):
+    """A transaction entered by hand. The server picks its id."""
     amount: Optional[Decimal] = None
     place:  Optional[str] = None
     transaction_datetime: LocalDatetime
     transaction_type : str
 
-class Date(BaseModel):
-    date: str
+class Transaction(NewTransaction):
+    # Positive ids are chat.db ROWIDs; negative ids were entered by hand.
+    transaction_id: int
 
 class UpdateTransaction(BaseModel):
-    transaction_id: int
     amount: Decimal | None = None
     place: str | None = None
-    date: str
     transaction_datetime: LocalDatetime | None = None
     transaction_type: str | None = None
 

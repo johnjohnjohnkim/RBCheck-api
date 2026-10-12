@@ -91,4 +91,4 @@ def test_wall_clock_times_from_the_client_are_read_as_local(client, db):
         "transaction_datetime": "2026-10-12T23:30:00", "transaction_type": "debit",
     })
     assert r.status_code == 201, r.text
-    assert ids(client.get("/transactions/date", params={"date_str": "10/12/2026"})) == {9}
+    assert ids(client.get("/transactions/date", params={"date_str": "10/12/2026"})) == {r.json()["transaction_id"]}

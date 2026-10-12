@@ -1,7 +1,7 @@
 from .. import models, oauth2, schemas
 from fastapi import status, HTTPException, Depends, APIRouter
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
 from ..database import get_db
 from typing import List
 from datetime import date, datetime, timedelta
@@ -54,14 +54,18 @@ def send_date_transactions(date_str: str = "", db: Session = Depends(get_db)):
     try:
         day = datetime.strptime(date_str, '%m/%d/%Y').date() if date_str else local_today()
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="date_str must be MM/DD/YYYY.")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="date_str must be MM/DD/YYYY.")
 
     return transactions_between(db, *local_day_range(day)).all()
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=schemas.Transaction)
-def send_transaction(transactions: schemas.Transaction, db: Session = Depends(get_db)):
-    new_transaction = models.Transaction(**transactions.model_dump())
+def send_transaction(transactions: schemas.NewTransaction, db: Session = Depends(get_db)):
+    # Hand-entered rows count down from -1 so they never take a chat.db ROWID,
+    # which the Mac agent will use later. The lock stops two at once picking the same id.
+    db.execute(text("LOCK TABLE transactions IN SHARE ROW EXCLUSIVE MODE"))
+    lowest = db.query(func.min(models.Transaction.transaction_id)).scalar() or 0
+    new_transaction = models.Transaction(transaction_id=min(lowest, 0) - 1, **transactions.model_dump())
 
     db.add(new_transaction)
     db.commit()
