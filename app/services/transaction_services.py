@@ -75,6 +75,22 @@ def filter_cc_payment_duplicates(transactions, db: Session):
     return filtered
 
 
+def delete_withdrawals_covered_by(payments, db: Session):
+    """
+    The other half of filter_cc_payment_duplicates: when the Withdrawal text
+    arrived in an earlier batch than its Credit Card Payment, remove it now.
+    """
+    for p in payments:
+        if p['transaction_type'] != 'Credit Card Payment' or p['amount'] is None:
+            continue
+        dt = p['transaction_datetime']
+        db.query(models.Transaction).filter(
+            models.Transaction.transaction_type == 'Withdrawal',
+            models.Transaction.amount == p['amount'],
+            models.Transaction.transaction_datetime.between(dt - DEDUP_WINDOW, dt + DEDUP_WINDOW),
+        ).delete(synchronize_session=False)
+
+
 def ingest_messages(db: Session, messages: list[schemas.IngestMessage]) -> int:
     """
     Parses, de-duplicates and stores a batch of texts. Safe to call again
@@ -85,6 +101,7 @@ def ingest_messages(db: Session, messages: list[schemas.IngestMessage]) -> int:
     if not rows:
         return 0
 
+    delete_withdrawals_covered_by(rows, db)
     inserted = db.execute(
         insert(models.Transaction)
         .values(rows)

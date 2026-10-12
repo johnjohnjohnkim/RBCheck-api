@@ -72,3 +72,8 @@ def test_withdrawal_matching_an_earlier_stored_payment_is_dropped(client, db):
 def test_unrelated_withdrawals_are_kept(client, db):
     ingest(client, cc_payment(1, T0, "50.00"), withdrawal(2, T0 + 30, "49.00"), withdrawal(3, T0 + 120, "50.00"))
     assert set(stored(db)) == {1, 2, 3}
+
+def test_stored_withdrawal_is_removed_when_its_payment_arrives_later(client, db):
+    ingest(client, withdrawal(1, T0, "50.00"), withdrawal(2, T0, "49.00"))
+    ingest(client, cc_payment(3, T0 + 30, "50.00"))
+    assert set(stored(db)) == {2, 3}
