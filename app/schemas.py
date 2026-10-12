@@ -1,13 +1,21 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, EmailStr, Field
 from datetime import datetime
-from typing import Optional
+from typing import Annotated, Optional
 from decimal import Decimal
+
+from .config import env
+
+def _assume_local_time(dt: datetime) -> datetime:
+    """The client sends wall-clock times with no zone; read them as the app's zone."""
+    return dt.replace(tzinfo=env.tz) if dt.tzinfo is None else dt
+
+LocalDatetime = Annotated[datetime, AfterValidator(_assume_local_time)]
 
 class Transaction(BaseModel):
     transaction_id: int
     amount: Optional[Decimal] = None
     place:  Optional[str] = None
-    transaction_datetime: datetime
+    transaction_datetime: LocalDatetime
     transaction_type : str
 
 class Date(BaseModel):
@@ -18,7 +26,7 @@ class UpdateTransaction(BaseModel):
     amount: Decimal | None = None
     place: str | None = None
     date: str
-    transaction_datetime: datetime | None = None
+    transaction_datetime: LocalDatetime | None = None
     transaction_type: str | None = None
 
 class SpendingDisplay(BaseModel):

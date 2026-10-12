@@ -1,5 +1,5 @@
 import base64
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
+from ..config import env
 from ..sms_parser import parseTransaction, transactionAnalysis
 
 # A Credit Card Payment also produces a Withdrawal text for the same amount
@@ -14,14 +15,21 @@ from ..sms_parser import parseTransaction, transactionAnalysis
 DEDUP_WINDOW = timedelta(seconds=60)
 
 
-def build_datetime_range(start_date, end_date=None):
+def local_today() -> date:
+    """Today's date in the app's time zone, whatever zone the server runs in."""
+    return datetime.now(env.tz).date()
 
-    day_max = datetime.combine(start_date, time.max)
-    if end_date is None:
-        day_min = datetime.combine(start_date, time.min)
-    else:
-        day_min = datetime.combine(end_date, time.min)
-    return day_max, day_min
+
+def local_day_range(first: date, last: date | None = None) -> tuple[datetime, datetime]:
+    """
+    The span from the start of `first` to the start of the day after `last`
+    (or after `first` alone), in the app's time zone. Filter with
+    start <= t < end so a moment is never in two days.
+    """
+    last = last or first
+    start = datetime.combine(first, time.min, env.tz)
+    end = datetime.combine(last + timedelta(days=1), time.min, env.tz)
+    return start, end
 
 
 def parse_message(message: schemas.IngestMessage) -> dict:
