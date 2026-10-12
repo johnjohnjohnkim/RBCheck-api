@@ -45,8 +45,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from app import models
 from app.database import SessionLocal, engine
 from app.main import app
+from app.utils import hash as hash_password
 
 INGEST_HEADERS = {"X-Ingest-Key": "test-ingest-key"}
 
@@ -66,7 +68,21 @@ def db():
     session.close()
 
 
+TEST_EMAIL = "me@example.com"
+TEST_PASSWORD = "correct horse battery"
+
+
 @pytest.fixture
-def client():
+def anon_client():
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def client(anon_client, db):
+    """A client logged in as a freshly created user."""
+    db.add(models.Users(user_email=TEST_EMAIL, user_password=hash_password(TEST_PASSWORD)))
+    db.commit()
+    r = anon_client.post("/login", data={"username": TEST_EMAIL, "password": TEST_PASSWORD})
+    anon_client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
+    return anon_client

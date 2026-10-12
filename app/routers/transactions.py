@@ -1,4 +1,4 @@
-from .. import models, schemas
+from .. import models, oauth2, schemas
 from fastapi import status, HTTPException, Depends, APIRouter
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -10,7 +10,8 @@ from ..services.transaction_services import local_day_range, local_today
 
 router = APIRouter(
     prefix="/transactions",
-    tags=["transactions"]
+    tags=["transactions"],
+    dependencies=[Depends(oauth2.get_current_user)],
 )
 
 def transactions_between(db: Session, start: datetime, end: datetime):

@@ -39,14 +39,6 @@ class UserCreate(BaseModel):
     user_email: EmailStr
     user_password: str
 
-class UserOut(BaseModel):
-    user_id: int
-    user_email: EmailStr
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
 class TokenData(BaseModel):
     id: Optional[int] = None
 
