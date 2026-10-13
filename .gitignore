@@ -11,3 +11,6 @@ cpp_server/build/
 CLAUDE.md
 .pytest_cache/
 backups/
+
+# Database dumps hold personal data
+*.dump
