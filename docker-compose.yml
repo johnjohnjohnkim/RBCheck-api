@@ -45,10 +45,31 @@ services:
     restart: unless-stopped
     logging: *logging
 
+  # The public demo: the same API on its own database, which it rebuilds every
+  # hour as a scrambled copy of the real one (app/demo.py). It never writes to
+  # the real database and doesn't accept texts from the Mac.
+  api-demo:
+    build: .
+    environment:
+      DATABASE_HOSTNAME: db
+      DATABASE_PORT: 5432
+      DATABASE_USERNAME: ${DATABASE_USERNAME}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      DATABASE_NAME: ${DEMO_DATABASE_NAME:-rbcheck_demo}
+      DEMO_SOURCE_DATABASE_NAME: ${DATABASE_NAME}
+      INGEST_API_KEY: ${INGEST_API_KEY}
+      TIMEZONE: ${TIMEZONE:-America/Toronto}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *logging
+
   caddy:
     image: caddy:2
     environment:
       API_DOMAIN: ${API_DOMAIN:?set in .env}
+      DEMO_API_DOMAIN: ${DEMO_API_DOMAIN:-api.rbcheckdemo.gwanwoo.dev}
     ports:
       - "80:80"
       - "443:443"
@@ -60,6 +81,7 @@ services:
       - caddy-config:/config
     depends_on:
       - api
+      - api-demo
     restart: unless-stopped
     logging: *logging
 

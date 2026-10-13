@@ -1,6 +1,6 @@
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Env(BaseSettings):
@@ -18,6 +18,17 @@ class Env(BaseSettings):
     # The day boundaries for "today", "this week" and "this month", and the
     # zone times are returned in. Independent of the server's own clock zone.
     TIMEZONE: str = "America/Toronto"
+
+    # Set only on the public demo API: the real database it copies, scrambled,
+    # into its own DATABASE_NAME every hour (see app/demo.py).
+    DEMO_SOURCE_DATABASE_NAME: str | None = None
+
+    @model_validator(mode="after")
+    def _demo_never_overwrites_its_source(self):
+        # The demo replaces everything in its own database every hour.
+        if self.DEMO_SOURCE_DATABASE_NAME == self.DATABASE_NAME:
+            raise ValueError("DEMO_SOURCE_DATABASE_NAME must not be DATABASE_NAME")
+        return self
 
     @field_validator("TIMEZONE")
     @classmethod

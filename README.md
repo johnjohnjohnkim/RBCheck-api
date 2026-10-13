@@ -40,6 +40,7 @@ See `requirements.txt` for exact pinned versions.
 RBCheck-api/
 ├── app/
 │   ├── main.py                       FastAPI app, CORS, routers, /health
+│   ├── demo.py                       Scrambled copy of the data for the public demo
 │   ├── config.py                     Env settings (pydantic-settings, reads .env)
 │   ├── database.py                   Postgres engine/session
 │   ├── models.py                     SQLAlchemy Transaction and Users models
@@ -78,6 +79,8 @@ Copy `.env.example` to `.env` and fill it in; the comments in it say how to gene
 | `INGEST_API_KEY` | Shared secret the Mac agent sends as `X-Ingest-Key` |
 | `TIMEZONE` | Zone for day boundaries and returned times (default `America/Toronto`) |
 | `API_DOMAIN` | Domain Caddy gets a certificate for (Compose only) |
+| `DEMO_API_DOMAIN` | Domain of the public demo API (Compose only, default `api.rbcheckdemo.gwanwoo.dev`) |
+| `DEMO_SOURCE_DATABASE_NAME` | Set only on the demo API: the real database it copies, scrambled (see below) |
 
 ## Running locally
 
@@ -97,6 +100,18 @@ pytest
 
 The tests need a Postgres server. By default they use (and create) `rbcheck_test` on `localhost` as your OS user; override with `TEST_DATABASE_HOSTNAME`, `_PORT`, `_USERNAME`, `_PASSWORD` and `_NAME`. They empty every table before each test, so the name must end in `_test`.
 
+## The public demo
+
+`api-demo` in `docker-compose.yml` is a second copy of the API for the public demo site. It has its own database (`rbcheck_demo`, created on first start) and, on startup and then every hour, replaces everything in it with a scrambled copy of the real data (`app/demo.py`):
+
+- about a fifth of the transactions are left out;
+- amounts are scaled by one hidden factor and jittered one by one;
+- times move by up to 30 hours;
+- merchant names become generic stand-ins;
+- ids are renumbered.
+
+The scrambling is keyed on `INGEST_API_KEY`, so it can't be undone from this public code. The demo only reads the real database, doesn't take texts from the Mac, and visitors' edits disappear at the next rebuild.
+
 ## Deploying to AWS Lightsail
 
 A 1 GB Lightsail instance is enough for Postgres, the API and Caddy.
@@ -104,7 +119,7 @@ A 1 GB Lightsail instance is enough for Postgres, the API and Caddy.
 **1. Create the server**
 - Lightsail → Create instance → Linux, **Ubuntu 24.04 LTS**, the 1 GB plan.
 - Networking tab: create a **static IP** and attach it. In the IPv4 firewall, add **HTTPS (443)**; keep SSH (22) and HTTP (80, needed for the certificate).
-- In your DNS, add an **A record** for `api.gwanwoo.dev` pointing at the static IP.
+- In your DNS, add **A records** for `api.rbcheck.gwanwoo.dev` and `api.rbcheckdemo.gwanwoo.dev` pointing at the static IP.
 
 **2. Install Docker and start the stack** (over SSH)
 
@@ -114,7 +129,7 @@ sudo usermod -aG docker $USER && exit        # log back in afterwards
 git clone git@github.com:johnjohnjohnkim/RBCheck-api.git && cd RBCheck-api   # private repo: add the server's key as a GitHub deploy key first
 cp .env.example .env && chmod 600 .env && nano .env   # fill in every secret
 docker compose up -d --build
-curl https://api.gwanwoo.dev/health          # {"status":"ok"} once the certificate is issued
+curl https://api.rbcheck.gwanwoo.dev/health          # {"status":"ok"} once the certificate is issued
 ```
 
 **3. Move the existing data over**
@@ -140,7 +155,7 @@ Check a few recent transactions show the same times as before.
 
 **5. Switch the Mac over**
 - Stop the old `uvicorn` and `poller.py` on the Mac.
-- From this repo on the Mac: `agent/install.sh https://api.gwanwoo.dev` and paste `INGEST_API_KEY` when asked.
+- From this repo on the Mac: `agent/install.sh https://api.rbcheck.gwanwoo.dev` and paste `INGEST_API_KEY` when asked.
 - Give Full Disk Access to the python path it prints, then follow the log: `tail -f ~/Library/Logs/rbcheck-agent.log`. It should report `Starting after ROWID …` and send anything newer.
 - Keep the Mac awake: System Settings → Battery/Energy → "Prevent automatic sleeping when the display is off".
 
@@ -148,7 +163,7 @@ Check a few recent transactions show the same times as before.
 
 ## API
 
-There is no login: it's a public demo. Only `/ingest` needs a key (`X-Ingest-Key`), so only the Mac can add texts.
+There is no login. Only `/ingest` needs a key (`X-Ingest-Key`), so only the Mac can add texts.
 
 Transactions:
 

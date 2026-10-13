@@ -3,3 +3,9 @@
 	encode gzip
 	reverse_proxy api:8000
 }
+
+# The public demo, with scrambled data.
+{$DEMO_API_DOMAIN} {
+	encode gzip
+	reverse_proxy api-demo:8000
+}
