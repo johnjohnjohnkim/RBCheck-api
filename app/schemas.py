@@ -1,4 +1,4 @@
-from pydantic import AfterValidator, BaseModel, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, Field
 from datetime import date, datetime
 from typing import Annotated, Optional
 from decimal import Decimal
@@ -57,17 +57,6 @@ class Digest(BaseModel):
     purchase_count: int
     unusual: list[DigestUnusual]
     computed_at: datetime
-
-class UserCreate(BaseModel):
-    user_email: EmailStr
-    user_password: str
-
-class TokenData(BaseModel):
-    id: Optional[int] = None
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
 
 class IngestMessage(BaseModel):
     """One RBC text as the Mac agent reads it from chat.db."""

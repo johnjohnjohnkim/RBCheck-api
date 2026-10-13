@@ -12,14 +12,14 @@ RBC sends a text for every purchase, withdrawal, deposit, and credit card paymen
  │ agent/ingest_agent.py  │──────────▶ │ Caddy (HTTPS) ─▶ api (FastAPI) ─▶ db     │
  │ reads chat.db (ro)     │ ingest key │                  parse · dedup · store   │
  └────────────────────────┘            └──────────────────────────────────────────┘
- Browser (RBCheck-client) ── HTTPS + login token ──▶ Caddy ─▶ api
+ Browser (RBCheck-client) ── HTTPS ──▶ Caddy ─▶ api
 ```
 
 1. **Forwarding** (`agent/ingest_agent.py`) reads RBC texts newer than the last one it sent from `chat.db` and posts them, raw, to `POST /ingest`. It asks the API where to resume when it starts, so restarts and outages lose nothing.
 2. **Parsing** (`app/sms_parser.py`) extracts the readable text from each message's `attributedBody` blob, then regexes out the dollar amount, merchant name, and transaction type (`Deposit`, `Withdrawal`, `CC Purchase`, `Credit Card Payment`, `Credit Refund`, or a balance-warning marker).
 3. **Deduplication** (`app/services/transaction_services.py`) drops a `Withdrawal` that is really the settlement side of a `Credit Card Payment` for the same amount within 60 seconds, whichever of the two arrives first.
 4. **Storage**: rows are inserted with the `chat.db` ROWID as `transaction_id`; ones already stored are skipped, so resending is harmless. Transactions entered by hand get negative ids.
-5. **API** (`app/routers/transactions.py`) serves summaries and filtered transaction lists to the logged-in client. "Today", "this week" and "this month" follow `TIMEZONE`, not the server's clock.
+5. **API** (`app/routers/transactions.py`) serves summaries and filtered transaction lists to the client. "Today", "this week" and "this month" follow `TIMEZONE`, not the server's clock.
 6. **Daily digests** (`app/services/insights.py`) summarise each day: spend against the previous 7-day average, top merchants, unusual charges and the month-end pace. They are stored in `daily_digests` and recomputed whenever a change could affect them, including texts that arrive days late.
 
 Spending everywhere follows `app/services/spending.py`: purchases and withdrawals add, refunds subtract, deposits and card payments don't count.
@@ -44,21 +44,16 @@ RBCheck-api/
 │   ├── database.py                   Postgres engine/session
 │   ├── models.py                     SQLAlchemy Transaction and Users models
 │   ├── schemas.py                    Pydantic request/response schemas
-│   ├── oauth2.py                     JWT creation/verification, get_current_user dependency
-│   ├── utils.py                      Password hashing (passlib/bcrypt)
 │   ├── sms_parser.py                 Extracts amount/merchant/type from iMessage bodies
 │   ├── routers/
-│   │   ├── transactions.py           /transactions endpoints (login required)
-│   │   ├── auth.py                   /login
-│   │   ├── insights.py               /insights daily digests (login required)
+│   │   ├── transactions.py           /transactions endpoints
+│   │   ├── insights.py               /insights daily digests
 │   │   └── ingest.py                 /ingest endpoints for the Mac agent (ingest key required)
 │   ├── services/
 │   │   ├── clock.py                  Today and local-day ranges in TIMEZONE
 │   │   ├── insights.py               Daily digests and the spending summary
 │   │   ├── spending.py               What counts as spending
 │   │   └── transaction_services.py   Parsing, de-duplication, ingest
-│   └── scripts/
-│       └── create_user.py            Creates the login, or resets its password
 ├── agent/
 │   ├── ingest_agent.py               Runs on the Mac; forwards RBC texts to /ingest
 │   └── install.sh                    Installs it as a launchd job
@@ -80,9 +75,6 @@ Copy `.env.example` to `.env` and fill it in; the comments in it say how to gene
 | Variable | Description |
 |---|---|
 | `DATABASE_HOSTNAME` / `_PORT` / `_USERNAME` / `_PASSWORD` / `_NAME` | Postgres connection. Under Compose the host is always `db`. |
-| `SECRET_KEY` | Signs login tokens |
-| `ALGORITHM` | JWT signing algorithm, `HS256` |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | How long a login lasts |
 | `INGEST_API_KEY` | Shared secret the Mac agent sends as `X-Ingest-Key` |
 | `TIMEZONE` | Zone for day boundaries and returned times (default `America/Toronto`) |
 | `API_DOMAIN` | Domain Caddy gets a certificate for (Compose only) |
@@ -95,7 +87,6 @@ source venv/bin/activate
 pip install -r requirements-dev.txt
 cp .env.example .env              # point DATABASE_* at a local Postgres
 uvicorn app.main:app --reload
-python -m app.scripts.create_user you@example.com
 ```
 
 ## Tests
@@ -139,7 +130,6 @@ On the server:
 
 ```bash
 deploy/restore.sh rbcheck.dump
-docker compose exec api python -m app.scripts.create_user you@example.com
 ```
 
 Check a few recent transactions show the same times as before.
@@ -158,7 +148,9 @@ Check a few recent transactions show the same times as before.
 
 ## API
 
-Transaction endpoints need `Authorization: Bearer <token>` from `/login`:
+There is no login: it's a public demo. Only `/ingest` needs a key (`X-Ingest-Key`), so only the Mac can add texts.
+
+Transactions:
 
 | Method | Path | Description |
 |---|---|---|
@@ -181,11 +173,9 @@ Other endpoints:
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/login` | Exchange email/password for a token (`OAuth2PasswordRequestForm`: `username` = email) |
 | GET | `/ingest/cursor` | Highest stored `chat.db` ROWID (needs `X-Ingest-Key`) |
 | POST | `/ingest` | Store a batch of raw texts (needs `X-Ingest-Key`) |
 | GET | `/health` | API and database are up |
 
-There is no sign-up endpoint; create the login with `app/scripts/create_user.py`.
 
 CORS is restricted to `gwanwoo.dev`, its subdomains, and `localhost`/`127.0.0.1` (see `app/main.py`).

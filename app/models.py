@@ -5,7 +5,6 @@ Initializes PostgreSQL tables with ORM
 from .database import Base
 from sqlalchemy import JSON, Column, Date, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.sql.expression import text
 from sqlalchemy.sql.sqltypes import TIMESTAMP
 
 class Transaction(Base):
@@ -16,14 +15,6 @@ class Transaction(Base):
     amount = Column(Numeric(precision=10, scale=2))
     place = Column(String)
     transaction_type = Column(String, nullable=False)
-
-class Users(Base):
-    __tablename__ = "users"
-
-    user_id = Column(Integer, primary_key=True)
-    user_email = Column(String, nullable=False, unique=True)
-    user_password = Column(String, nullable=False)
-    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=text('now()'))
 
 class DailyDigest(Base):
     """One computed summary per local calendar day; see services/insights.py."""

@@ -37,5 +37,10 @@ def test_patch_ignores_the_id_and_date_the_client_sends(client):
 def test_patch_of_a_missing_transaction_is_404(client):
     assert client.patch("/transactions/12345", json={"place": "X"}).status_code == 404
 
-def test_health(anon_client):
-    assert anon_client.get("/health").json() == {"status": "ok"}
+def test_health(client):
+    assert client.get("/health").json() == {"status": "ok"}
+
+def test_everything_but_ingest_is_open(client):
+    for path in ("/transactions/summary", "/transactions/month", "/insights/today", "/insights/history"):
+        assert client.get(path).status_code == 200, path
+    assert client.get("/ingest/cursor").status_code in (401, 403)

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import engine, get_db
-from .routers import auth, ingest, insights, transactions
+from .routers import ingest, insights, transactions
 
 
 @asynccontextmanager
@@ -35,7 +35,6 @@ app.add_middleware(
 
 app.include_router(transactions.router)
 app.include_router(insights.router)
-app.include_router(auth.router)
 app.include_router(ingest.router)
 
 

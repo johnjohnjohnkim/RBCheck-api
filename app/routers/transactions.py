@@ -1,4 +1,4 @@
-from .. import models, oauth2, schemas
+from .. import models, schemas
 from fastapi import status, HTTPException, Depends, APIRouter
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
@@ -13,7 +13,6 @@ from ..services.transaction_services import forget_digests_from, transactions_be
 router = APIRouter(
     prefix="/transactions",
     tags=["transactions"],
-    dependencies=[Depends(oauth2.get_current_user)],
 )
 
 @router.get("/summary", status_code=status.HTTP_200_OK, response_model=schemas.SpendingDisplay)

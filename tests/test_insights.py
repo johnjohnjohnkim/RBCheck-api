@@ -123,11 +123,6 @@ def test_summary_counts_refunds(week):
     assert s.monthly == Decimal("120.00")
 
 
-def test_insights_need_a_login(anon_client):
-    assert anon_client.get("/insights/today").status_code == 401
-    assert anon_client.get("/insights/history").status_code == 401
-
-
 def test_today_endpoint(client, week, today):
     body = client.get("/insights/today").json()
     assert body["day"] == "2026-07-10"

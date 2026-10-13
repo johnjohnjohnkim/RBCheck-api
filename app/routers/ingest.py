@@ -1,6 +1,6 @@
 """
 Endpoints for the Mac agent that forwards RBC texts from chat.db.
-They take a shared key rather than a user login, and can only add data.
+Unlike the rest of the API they need a shared key, so only the Mac can add texts.
 """
 
 import secrets

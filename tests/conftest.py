@@ -22,9 +22,6 @@ assert TEST_DB["DATABASE_NAME"].endswith("_test"), "Refusing to run tests agains
 # Settings are read when the app is imported, so these must be set first.
 os.environ.update(TEST_DB)
 os.environ.update({
-    "SECRET_KEY": "test-secret",
-    "ALGORITHM": "HS256",
-    "ACCESS_TOKEN_EXPIRE_MINUTES": "60",
     "INGEST_API_KEY": "test-ingest-key",
     "TIMEZONE": "America/Toronto",
 })
@@ -45,10 +42,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from app import models
 from app.database import SessionLocal, engine
 from app.main import app
-from app.utils import hash as hash_password
 
 INGEST_HEADERS = {"X-Ingest-Key": "test-ingest-key"}
 
@@ -58,7 +53,7 @@ def empty_tables():
     with TestClient(app):
         pass  # Runs startup, which creates the tables.
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE transactions, users, daily_digests RESTART IDENTITY"))
+        conn.execute(text("TRUNCATE transactions, daily_digests RESTART IDENTITY"))
 
 
 @pytest.fixture
@@ -68,21 +63,7 @@ def db():
     session.close()
 
 
-TEST_EMAIL = "me@example.com"
-TEST_PASSWORD = "correct horse battery"
-
-
 @pytest.fixture
-def anon_client():
+def client():
     with TestClient(app) as c:
         yield c
-
-
-@pytest.fixture
-def client(anon_client, db):
-    """A client logged in as a freshly created user."""
-    db.add(models.Users(user_email=TEST_EMAIL, user_password=hash_password(TEST_PASSWORD)))
-    db.commit()
-    r = anon_client.post("/login", data={"username": TEST_EMAIL, "password": TEST_PASSWORD})
-    anon_client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
-    return anon_client

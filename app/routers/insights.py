@@ -3,12 +3,12 @@ from typing import List
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from .. import oauth2, schemas
+from .. import schemas
 from ..database import get_db
 from ..services import clock
 from ..services.insights import history, store_digest
 
-router = APIRouter(prefix="/insights", tags=["insights"], dependencies=[Depends(oauth2.get_current_user)])
+router = APIRouter(prefix="/insights", tags=["insights"])
 
 
 @router.get("/today", response_model=schemas.Digest)
