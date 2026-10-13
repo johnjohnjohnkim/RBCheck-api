@@ -36,8 +36,9 @@ def parse_message(message: schemas.IngestMessage) -> dict:
     """Turns one raw RBC text into a transactions row."""
     body = base64.b64decode(message.body_b64) if message.body_b64 is not None else None
 
-    # The parser was written against str() of the raw blob, so keep feeding it that.
-    amount, place, transaction_type = transactionAnalysis(parseTransaction(str(body).upper()))
+    # Decode the blob rather than str() it: str() escapes apostrophes, storing TIM\'S for TIM'S.
+    text = body.decode("utf-8", "replace") if body is not None else ""
+    amount, place, transaction_type = transactionAnalysis(parseTransaction(text.upper()))
 
     return {
         "transaction_id": message.rowid,

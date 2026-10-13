@@ -8,7 +8,7 @@ from tests.conftest import INGEST_HEADERS
 
 def message(rowid, sent_at, text):
     """An ingest payload for one text, wrapped the way chat.db's attributedBody wraps it."""
-    blob = b"\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84" + text.encode() + b"\x86\x84\x02iI"
+    blob = b"\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84" + text.encode() + b"\x86\x84\x02iI\"NSDictionary"
     return {"rowid": rowid, "sent_at": sent_at, "body_b64": base64.b64encode(blob).decode()}
 
 def purchase(rowid, sent_at, amount, place="TIM HORTONS"):
@@ -44,6 +44,10 @@ def test_parses_and_stores_a_purchase(client, db):
     assert t.place == "TIM HORTONS"
     assert t.transaction_type == "CC Purchase"
     assert t.transaction_datetime == datetime.fromtimestamp(T0, timezone.utc)
+
+def test_apostrophes_are_stored_as_is(client, db):
+    ingest(client, purchase(8, T0, "3.03", place="UCC TIM'S UPPER"))
+    assert stored(db)[8].place == "UCC TIM'S UPPER"
 
 def test_empty_body_is_stored_like_before(client, db):
     ingest(client, {"rowid": 3, "sent_at": T0, "body_b64": None})
