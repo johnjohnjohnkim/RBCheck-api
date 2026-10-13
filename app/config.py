@@ -1,5 +1,6 @@
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Env(BaseSettings):
@@ -20,6 +21,16 @@ class Env(BaseSettings):
     # The day boundaries for "today", "this week" and "this month", and the
     # zone times are returned in. Independent of the server's own clock zone.
     TIMEZONE: str = "America/Toronto"
+
+    @field_validator("TIMEZONE")
+    @classmethod
+    def _known_zone(cls, value: str) -> str:
+        # A typo fails at startup, not on the first request.
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(f"unknown time zone {value!r}") from None
+        return value
 
     @property
     def tz(self) -> ZoneInfo:

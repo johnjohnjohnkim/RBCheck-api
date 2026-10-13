@@ -58,7 +58,7 @@ def empty_tables():
     with TestClient(app):
         pass  # Runs startup, which creates the tables.
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE transactions, users RESTART IDENTITY"))
+        conn.execute(text("TRUNCATE transactions, users, daily_digests RESTART IDENTITY"))
 
 
 @pytest.fixture

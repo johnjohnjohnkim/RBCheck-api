@@ -20,6 +20,9 @@ RBC sends a text for every purchase, withdrawal, deposit, and credit card paymen
 3. **Deduplication** (`app/services/transaction_services.py`) drops a `Withdrawal` that is really the settlement side of a `Credit Card Payment` for the same amount within 60 seconds, whichever of the two arrives first.
 4. **Storage**: rows are inserted with the `chat.db` ROWID as `transaction_id`; ones already stored are skipped, so resending is harmless. Transactions entered by hand get negative ids.
 5. **API** (`app/routers/transactions.py`) serves summaries and filtered transaction lists to the logged-in client. "Today", "this week" and "this month" follow `TIMEZONE`, not the server's clock.
+6. **Daily digests** (`app/services/insights.py`) summarise each day: spend against the previous 7-day average, top merchants, unusual charges and the month-end pace. They are stored in `daily_digests` and recomputed whenever a change could affect them, including texts that arrive days late.
+
+Spending everywhere follows `app/services/spending.py`: purchases and withdrawals add, refunds subtract, deposits and card payments don't count.
 
 ## Tech stack
 
@@ -47,9 +50,13 @@ RBCheck-api/
 │   ├── routers/
 │   │   ├── transactions.py           /transactions endpoints (login required)
 │   │   ├── auth.py                   /login
+│   │   ├── insights.py               /insights daily digests (login required)
 │   │   └── ingest.py                 /ingest endpoints for the Mac agent (ingest key required)
 │   ├── services/
-│   │   └── transaction_services.py   Local-day ranges, parsing, de-duplication, ingest
+│   │   ├── clock.py                  Today and local-day ranges in TIMEZONE
+│   │   ├── insights.py               Daily digests and the spending summary
+│   │   ├── spending.py               What counts as spending
+│   │   └── transaction_services.py   Parsing, de-duplication, ingest
 │   └── scripts/
 │       └── create_user.py            Creates the login, or resets its password
 ├── agent/
@@ -155,7 +162,7 @@ Transaction endpoints need `Authorization: Bearer <token>` from `/login`:
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/transactions/summary` | Daily/weekly/rolling-7-day/monthly totals (excludes deposits and credit card payments) |
+| GET | `/transactions/summary` | Daily/weekly/rolling-7-day/monthly spending (refunds subtract; deposits and card payments don't count) |
 | GET | `/transactions/` | Paginated list (`offset`, `limit`) |
 | GET | `/transactions/date?date_str=MM/DD/YYYY` | Transactions on a given date (defaults to today) |
 | GET | `/transactions/weekly` | Transactions since Monday |
@@ -167,6 +174,8 @@ Transaction endpoints need `Authorization: Bearer <token>` from `/login`:
 | GET | `/transactions/{id}` | Single transaction |
 | POST | `/transactions` | Add a transaction by hand (the server picks the id) |
 | PATCH | `/transactions/{id}` | Partially update a transaction |
+| GET | `/insights/today` | Today's digest |
+| GET | `/insights/history?days=30` | Digests for the last `days` days (1–366), newest first |
 
 Other endpoints:
 

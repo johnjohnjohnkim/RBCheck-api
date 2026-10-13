@@ -3,7 +3,8 @@ Initializes PostgreSQL tables with ORM
 """
 
 from .database import Base
-from sqlalchemy import Column, Integer, Numeric, String
+from sqlalchemy import JSON, Column, Date, Integer, Numeric, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.expression import text
 from sqlalchemy.sql.sqltypes import TIMESTAMP
 
@@ -23,3 +24,11 @@ class Users(Base):
     user_email = Column(String, nullable=False, unique=True)
     user_password = Column(String, nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=text('now()'))
+
+class DailyDigest(Base):
+    """One computed summary per local calendar day; see services/insights.py."""
+    __tablename__ = "daily_digests"
+
+    day = Column(Date, primary_key=True)
+    computed_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    payload = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)

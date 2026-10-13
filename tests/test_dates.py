@@ -5,8 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app import models
-from app.routers import transactions as transactions_router
-from app.services.transaction_services import local_day_range
+from app.services import clock
 
 TORONTO = ZoneInfo("America/Toronto")
 
@@ -25,17 +24,17 @@ def ids(response):
 @pytest.fixture
 def today_is(monkeypatch):
     def set_today(d):
-        monkeypatch.setattr(transactions_router, "local_today", lambda: d)
+        monkeypatch.setattr(clock, "today", lambda now=None: d)
     return set_today
 
 
 def test_day_range_spans_local_midnight_to_midnight():
-    start, end = local_day_range(date(2026, 10, 12))
+    start, end = clock.day_range(date(2026, 10, 12))
     assert start == datetime(2026, 10, 12, tzinfo=TORONTO)
     assert end == datetime(2026, 10, 13, tzinfo=TORONTO)
 
 def test_day_range_covers_the_daylight_saving_change():
-    start, end = local_day_range(date(2026, 11, 1))
+    start, end = clock.day_range(date(2026, 11, 1))
     # Subtracting two times in the same zone compares wall clocks, so go through UTC.
     assert end.astimezone(timezone.utc) - start.astimezone(timezone.utc) == timedelta(hours=25)
 

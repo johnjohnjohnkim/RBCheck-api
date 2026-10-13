@@ -1,5 +1,5 @@
 import base64
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -7,7 +7,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
-from ..config import env
+from . import clock
 from ..sms_parser import parseTransaction, transactionAnalysis
 
 # A Credit Card Payment also produces a Withdrawal text for the same amount
@@ -15,21 +15,13 @@ from ..sms_parser import parseTransaction, transactionAnalysis
 DEDUP_WINDOW = timedelta(seconds=60)
 
 
-def local_today() -> date:
-    """Today's date in the app's time zone, whatever zone the server runs in."""
-    return datetime.now(env.tz).date()
-
-
-def local_day_range(first: date, last: date | None = None) -> tuple[datetime, datetime]:
-    """
-    The span from the start of `first` to the start of the day after `last`
-    (or after `first` alone), in the app's time zone. Filter with
-    start <= t < end so a moment is never in two days.
-    """
-    last = last or first
-    start = datetime.combine(first, time.min, env.tz)
-    end = datetime.combine(last + timedelta(days=1), time.min, env.tz)
-    return start, end
+def transactions_between(db: Session, first: date, last: date | None = None):
+    """Transactions on the local days first..last (or on `first` alone), newest first."""
+    start, end = clock.day_range(first, last)
+    return db.query(models.Transaction).filter(
+        models.Transaction.transaction_datetime >= start,
+        models.Transaction.transaction_datetime < end,
+    ).order_by(models.Transaction.transaction_datetime.desc())
 
 
 def parse_message(message: schemas.IngestMessage) -> dict:
@@ -111,14 +103,27 @@ def ingest_messages(db: Session, messages: list[schemas.IngestMessage]) -> int:
         return 0
 
     delete_withdrawals_covered_by(rows, db)
-    inserted = db.execute(
+    inserted = {id for (id,) in db.execute(
         insert(models.Transaction)
         .values(rows)
         .on_conflict_do_nothing(index_elements=["transaction_id"])
         .returning(models.Transaction.transaction_id)
-    ).all()
+    )}
+    forget_digests_from(db, [r['transaction_datetime'] for r in rows if r['transaction_id'] in inserted])
     db.commit()
     return len(inserted)
+
+
+def forget_digests_from(db: Session, moments: list[datetime]) -> None:
+    """
+    Drops the stored digests a change at these moments could affect: their
+    days and every later one (digests compare against earlier days). They
+    are recomputed when next asked for. Texts can arrive days late, after
+    the Mac was off, so a digest stored as settled can still go stale.
+    """
+    if moments:
+        first = min(clock.local_date(m) for m in moments)
+        db.query(models.DailyDigest).filter(models.DailyDigest.day >= first).delete(synchronize_session=False)
 
 
 def last_ingested_rowid(db: Session) -> int:
